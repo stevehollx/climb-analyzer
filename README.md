@@ -146,7 +146,7 @@ They are then approximated to categories, similar to how Le Tour de France does 
 
 This system rewards both length and steepness, so a long moderate climb can score higher than a short steep one. It's designed to identify significant climbs that would challenge cyclists or hikers, not just steep driveways.
 
-## Disk usage info:
+## Disk usage info
 Using NED10m data and N America, my Docker VM uses about 1.1TB of disk. I'd recommend a 2TB drive for US analysis, but if you use the SRTM30m data and maybe smaller planet file like Europe, it may run on 512GB.
 
 ## Static exports
