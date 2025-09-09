@@ -49,10 +49,12 @@ More documentation on these steps is found at [OpenTopoData Server Documentation
 1. See the overpass-api/README for these separate instructions to build the local API. I am using a custom build since Apple Silicon macs don't play nice with the off-the-shelf docker images from drolbr or wiktorn.
 
 ### Step 4 - Stage Climb Analyzer
+#### Quickstart tip: Start here for performing just a small area anlysis, without needing to set up the local APIs mentioned in Steps 1-3.
 1. Edit `climb-analyzer.py` and change the URLs to your local APIs if you are running local servers. It defaults to the cloud APIs that have usage limits mentioned above.
 
 ## Running Climb Analyzer to analyze climbs
 
+0. Install python dependencies: `pip install overpy requests geopy numpy pandas tqdm openpyxl`
 1. Run ./climb-analyzer.py
 2. Input your details to analyze data.
 3. Example input and output:
