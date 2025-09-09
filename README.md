@@ -17,7 +17,7 @@ I am also including some tools that help to instantiate a local opentopodata API
 * Docker
 * OpenStreet Maps Overpass API (overpass-api.de/) with cloud limits, or run locally with wikitorn/overpass-api
 * OpenTopoData server (cloud with limits, or run locally)
-* (optional) Topo data and/or OSM planet data, depending if hosting local APIs
+* (optional) Topo data and/or OSM planet data, depending if hosting local APIs. You'll need roughly 500GB to 1 TB of free space if hosting OSM and topo data locally, depending on what area you are using data for.
 
 ## Installation summary
 1. (optional) Download topographic data
@@ -145,6 +145,9 @@ They are then approximated to categories, similar to how Le Tour de France does 
 * Cat 0 (HC): score > 80000
 
 This system rewards both length and steepness, so a long moderate climb can score higher than a short steep one. It's designed to identify significant climbs that would challenge cyclists or hikers, not just steep driveways.
+
+## Disk usage info:
+Using NED10m data and N America, my Docker VM uses about 1.1TB of disk. I'd recommend a 2TB drive for US analysis, but if you use the SRTM30m data and maybe smaller planet file like Europe, it may run on 512GB.
 
 ## Static exports
 
