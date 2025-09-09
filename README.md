@@ -4,7 +4,7 @@ Author: Steve Holl
 v1.0 - Sep 2025 - Initial public release.
 
 ## Who is this for?
-Have you ever visited or moved to a new area as a cyclist, and wanted to know what the top climbs for the area are? Strava no longer lets you search for KOMs by category on the map view (this was in the UI about 10 years ago), and their segment API only returns a limited set of segments, so there isn't a good way to find all good climbs in a selected area programmatically anymore.
+Have you ever visited or moved to a new area as a cyclist, and wanted to know what the top climbs for the area are? Strava no longer lets you search for segments by category on the map view (this was in the UI about 10 years ago), and their segment API only returns a limited set of segments, so there isn't a good way to find all good climbs in a selected area programmatically anymore.
 
 So I built an application to perform this function. It leverages open topographic data to find and rank road climbs, ideally used for cyclists.
 
