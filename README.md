@@ -10,6 +10,8 @@ So I built an application to perform this function. It leverages open topographi
 
 Input a zip code and a distance radius, and it will find, classify, and rank the climbs in that area. It will classify based on grade and duration. You can override the minimum grade or distance of the results if you want to change the floor criteria for climb results.
 
+I am also including some tools that help to instantiate a local opentopodata API, that help with downloading and reformatting the elevation data. Finally, check out my other project `overpass-api-macos-m1` which helps to run a local OpenStreetMap Overpass API on Apple Silicon, which you may also need if running this project.
+
 ## Dependencies
 * Python (using geopy, overpy, and pandas)
 * Docker
