@@ -13,11 +13,11 @@ import pandas as pd
 from tqdm import tqdm
 import geopandas as gpd
 from shapely.geometry import Point
+import requests
 
 #Standard libraries
 from dataclasses import dataclass
 from typing import List, Tuple, Optional, Dict, Generator
-import requests
 import math
 import time
 from collections import defaultdict
