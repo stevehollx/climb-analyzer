@@ -23,9 +23,10 @@ I am also including some tools that help to instantiate a local opentopodata API
 1. (optional) Download topographic data
 2. (optional) Build and host a local OpenTopoData API server
 3. (optional) Build a local openstreetmap overpass API server.
-3. Run ClimbAnalyzer to analyze road climbs for your location(s) of interest.
+4. Run ClimbAnalyzer to analyze road climbs for your location(s) of interest.
 
-Steps 1 - 3 are optional, but highly recommended. Without running a local API topo data server, you will hit OpenTopoData's 1000 calls/day limit very quickly. An alternative is to sign up for a paid OpenTopoData account. The overpass-api.de API has higher limits, but may still throttle you after a searches in a day, depending on your locations' road density.
+#### Quickstart tip: Jump to Step 4 for performing just a small area anlysis, without needing to set up the local APIs mentioned in Steps 1-3.
+Steps 1 - 3 are optional, but highly recommended. Without running a local API topo data server, you will hit OpenTopoData's 1000 calls/day limit very quickly. An alternative is to sign up for a paid OpenTopoData account. The overpass-api.de API has higher limits, but may still throttle you after a searches in a day, depending on your locations' road density. So if you have the disk space, I'd recommend running both local APIs.
 
 ### Step 1- Download topographic data
 I recommend SRTM30m for global data sets, or NED10m if you are in North America. SRTM30m is less precise but 78GB compressed vs. NED10m's 210 GB compressed.
@@ -49,7 +50,6 @@ More documentation on these steps is found at [OpenTopoData Server Documentation
 1. See the overpass-api/README for these separate instructions to build the local API. I am using a custom build since Apple Silicon macs don't play nice with the off-the-shelf docker images from drolbr or wiktorn.
 
 ### Step 4 - Stage Climb Analyzer
-#### Quickstart tip: Start here for performing just a small area anlysis, without needing to set up the local APIs mentioned in Steps 1-3.
 1. Edit `climb-analyzer.py` and change the URLs to your local APIs if you are running local servers. It defaults to the cloud APIs that have usage limits mentioned above.
 
 ## Running Climb Analyzer to analyze climbs
