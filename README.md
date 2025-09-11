@@ -1,7 +1,8 @@
 # Cycling Climb Finder
  
 Author: Steve Holl
-v1.0 - Sep 2025 - Initial public release.
+
+* v1.0 - Sep 2025 - Initial public release.
 
 ## Who is this for?
 Have you ever visited or moved to a new area as a cyclist, and wanted to know what the top climbs for the area are? Strava no longer lets you search for segments by category on the map view (this was in the UI about 10 years ago), and their segment API only returns a limited set of segments, so there isn't a good way to find all good climbs in a selected area programmatically anymore.
@@ -128,7 +129,7 @@ The system is actually quite liberal about what it calls a climb:
 * It doesn't require the road to be "only uphill" - it will analyze roads that go up and down
 * A "climb" is simply the entire length of a named road, regardless of whether it has flat or downhill sections mixed in
 * The minimum requirement is just having at least 2 points with elevation data
-* By default anything over a score of 8000 is represented, but this threshold can be adjusted at runtime. In my area, I'd consider around 8000 a good start of being considered a memorable climb, taking a few minutes or more to complete.
+* By default anything over a score of 6000 is represented, but this threshold can be adjusted at runtime. In my area, I'd consider around 6000 a good start of being considered a climb, taking a few minutes or more to complete.
 
 ## Scoring climbs
 Climbs are scored using:
