@@ -2,6 +2,8 @@
  
 Author: Steve Holl
 
+** NOTE: 15-oct-2025 ** I have a new version (v2) coming soon. Should publish within the next 1-3 weeks. It is a big re-architecture that has a setup wizard to walk through dependency installation and data downloading. Everything will be in docker containers, so anyone on linux/macos should be able to run this (not sure for windows/WSL--need testers). It is also MUCH faster as I optimized the road merging so entire US state analysis completes in about half a day.
+
 * v1.0 - Sep 2025 - Initial public release.
 
 ## Who is this for?
