@@ -1,0 +1,93 @@
+CHECKPOINT_INTERVAL_MIN: 15
+CHECKPOINT_MILESTONES_PERC:
+- 10
+- 25
+- 50
+- 75
+- 90
+DEPLOYMENT_TYPE: local
+ENABLE_CROSS_CHUNK_POSTPROCESS: true
+ELEVATION_BACKOFF_FACTOR: 2
+ELEVATION_BATCH_SIZE: 100
+ELEVATION_MAX_CONCURRENT: 16
+ELEVATION_MAX_RETRIES: 3
+ELEVATION_REQUEST_TIMEOUT_SEC: 45
+GEOCODING_MAX_CONCURRENT: 5
+GEOCODING_RETRY_ATTEMPTS: 3
+OVERPASS_API_DELAY_SEC: 0.0
+OVERPASS_API_URL: null
+TOPO_API_BASE_URL: http://opentopodata-server:5000/v1
+ELEVATION_DELAY_BETWEEN_BATCHES_SEC: 0.0
+ELEVATION_DATASET_TIERS: primary+secondary+tertiary
+CLOUD_CACHE_ENABLED: true
+CLOUD_CACHE_REPO: stevehollx/global-road-and-trail-climbs
+OSM_COVERAGE:
+- Andorra
+- California
+- Finland
+- Georgia
+- Hawaii
+- Luxembourg
+- Macedonia
+- Malta
+- Monaco
+- North Carolina
+- South Carolina
+- Tennessee
+- europe/monaco
+- Rhode Island
+ELEVATION_DATASETS: {}
+OSM_PLANET_DATA:
+- hawaii-latest.osm.pbf
+- monaco-latest.osm.pbf
+- rhode-island-latest.osm.pbf
+OSM_CHUNK_SIZE_KM: 30
+OSM_INDEXES: []
+ELEVATION_DATA: []
+merge_rules:
+  max_merge_distance_km: 0.5
+  length_tolerance_percent: 0
+  allow_cross_country_merge: false
+  allowed_cross_country_merging:
+  - France
+  - Spain
+  - Germany
+  - Italy
+  - Belgium
+  - Netherlands
+  - Luxembourg
+  - Austria
+  - Portugal
+  - Greece
+  - Denmark
+  - Sweden
+  - Finland
+  - Poland
+  - Czechia
+  - Hungary
+  - Slovakia
+  - Slovenia
+  - Estonia
+  - Latvia
+  - Lithuania
+  - Malta
+  - Switzerland
+  - Norway
+  - Iceland
+  - Liechtenstein
+xlsx_output:
+  max_file_size_mb: 100
+  format_template: default
+ANALYZED_REPORTS:
+- filename: Hawaii_climbs_all_basic_2025-11-05_v2.0.0_e0000.xlsx
+  region: Hawaii
+  canonical_path: Hawaii
+- filename: Luxembourg_climbs_all_basic_2025-11-01_v2.0.0_e0000.xlsx
+  region: Luxembourg
+  canonical_path: Luxembourg
+- filename: luxembourg_climbs_all_basic_2025-11-05_v2.0.0_e0000.xlsx
+  region: luxembourg
+  canonical_path: luxembourg
+- filename: monaco_climbs_all_basic_2025-11-05_v2.0.0_e0000.xlsx
+  region: monaco
+  canonical_path: monaco

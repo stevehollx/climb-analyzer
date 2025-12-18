@@ -1,0 +1,67 @@
+# Docker ignore file - exclude large data files from being copied into image
+# These directories are mounted as volumes instead
+
+# Data directories (mounted as volumes) - NEW STRUCTURE
+data/
+!data/.gitkeep
+output/
+opentopodata/
+
+# Old data directories (legacy, but keep for safety)
+planet-osm/
+osm_indexes/
+elevation_data/
+climb_analyzer_new/
+
+# UI directories (not needed in climb-analyzer container)
+ui/
+gui/
+!gui/.gitkeep
+
+# Build artifacts
+*.egg-info/
+build/
+dist/
+
+# Git and version control
+.git/
+.gitignore
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test files
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+.tmp/

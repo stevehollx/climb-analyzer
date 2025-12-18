@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""
+CLI tool for building spatial indexes for OSM .pbf files.
+
+Can be run standalone or via Docker wrapper.
+
+Usage:
+    python cli_build_index.py planet-osm/vermont-latest.osm.pbf
+    python cli_build_index.py --all
+"""
+
+import argparse
+import sys
+from pathlib import Path
+
+from index_builder import build_spatial_index, verify_index
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Build spatial R-tree indexes for OSM .pbf files",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Build index for a specific .pbf file
+  python cli_build_index.py planet-osm/vermont-latest.osm.pbf
+
+  # Build indexes for all .pbf files in planet-osm/
+  python cli_build_index.py --all
+
+  # Docker wrapper (from host machine)
+  docker compose run --rm climb-analyzer python cli_build_index.py --all
+        """
+    )
+
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        'pbf_file',
+        type=str,
+        nargs='?',
+        help='Path to .osm.pbf file'
+    )
+    group.add_argument(
+        '--all',
+        action='store_true',
+        help='Build indexes for all .pbf files in planet-osm/ directory'
+    )
+
+    parser.add_argument(
+        '--verify',
+        action='store_true',
+        help='Verify index after building'
+    )
+
+    parser.add_argument(
+        '--force',
+        action='store_true',
+        help='Rebuild index even if it already exists'
+    )
+
+    args = parser.parse_args()
+
+    pbf_files = []
+
+    if args.all:
+        # Find all .pbf files
+        planet_dir = Path("planet-osm")
+        if not planet_dir.exists():
+            print(f"Error: Directory {planet_dir} does not exist")
+            return 1
+
+        pbf_files = list(planet_dir.glob("*.osm.pbf"))
+
+        if not pbf_files:
+            print(f"No .osm.pbf files found in {planet_dir}")
+            return 1
+
+        print(f"Found {len(pbf_files)} .pbf file(s)")
+
+    else:
+        # Single file
+        pbf_path = Path(args.pbf_file)
+        if not pbf_path.exists():
+            print(f"Error: File {pbf_path} does not exist")
+            return 1
+
+        if not pbf_path.suffix == ".pbf":
+            print(f"Error: File must have .pbf extension")
+            return 1
+
+        pbf_files = [pbf_path]
+
+    # Build indexes
+    success_count = 0
+    skip_count = 0
+    fail_count = 0
+
+    for pbf_file in pbf_files:
+        print(f"\n{'='*80}")
+        print(f"  {pbf_file.name}")
+        print(f"{'='*80}\n")
+
+        index_file = pbf_file.with_suffix('.idx')
+
+        # Check if index already exists
+        if index_file.exists() and not args.force:
+            print(f"  Index already exists: {index_file.name}")
+
+            # Verify existing index
+            if verify_index(str(pbf_file)):
+                print(f"  ✓ Existing index is valid")
+                skip_count += 1
+                continue
+            else:
+                print(f"  ⚠️  Existing index is invalid, rebuilding...")
+
+        # Build index
+        print(f"  Building spatial index...")
+        print(f"  This may take 5-30 minutes depending on file size...")
+        print()
+
+        success = build_spatial_index(str(pbf_file))
+
+        if success:
+            print(f"\n  ✓ Index built: {index_file.name}")
+
+            # Verify if requested
+            if args.verify:
+                print(f"  Verifying index...")
+                if verify_index(str(pbf_file)):
+                    print(f"  ✓ Index verified successfully")
+                else:
+                    print(f"  ⚠️  Index verification failed")
+                    fail_count += 1
+                    continue
+
+            success_count += 1
+        else:
+            print(f"\n  ❌ Index build failed")
+            fail_count += 1
+
+    # Summary
+    print(f"\n{'='*80}")
+    print(f"  Index Build Summary")
+    print(f"{'='*80}\n")
+    print(f"  Success:     {success_count}")
+    print(f"  Skipped:     {skip_count}")
+    print(f"  Failed:      {fail_count}")
+    print(f"  Total files: {len(pbf_files)}")
+    print()
+
+    return 0 if fail_count == 0 else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,40 @@
+# Data directories (large files, generated)
+data/
+output/
+opentopodata/
+
+# Credentials and secrets
+.credentials/
+
+# Claude config (local)
+.claude/
+
+# Legacy/archive (escaped ! which has special meaning in gitignore)
+\!old/
+
+# Python build artifacts
+*.egg-info/
+__pycache__/
+*.pyc
+*.pyo
+dist/
+build/
+
+# macOS resource forks
+._*
+.DS_Store
+
+# Logs
+*.log
+
+# IDE/Editor
+.vscode/
+.idea/
+
+# Temporary files
+tmp/
+*.tmp.*
+
+# This file
+.gitignore
+.docker/

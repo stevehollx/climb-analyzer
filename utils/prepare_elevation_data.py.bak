@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+"""
+Prepare Elevation Data for OpenTopoData
+
+This script prepares downloaded elevation data for use with OpenTopoData by:
+1. Cleaning up AW3D30 files (removing duplicates, flattening structure)
+2. Removing overlapping tiles based on priority
+3. Updating the OpenTopoData configuration
+
+Usage:
+    python prepare_elevation_data.py [elevation_data_dir] [config_path]
+
+Examples:
+    # Using default paths
+    python prepare_elevation_data.py
+
+    # Custom paths
+    python prepare_elevation_data.py /path/to/elevation_data /path/to/config.yaml
+"""
+
+import sys
+from pathlib import Path
+
+# Import the preparation functions
+from dem_downloaders import prepare_elevation_data, update_opentopodata_config
+
+
+def main():
+    """Main entry point."""
+    # Default paths
+    default_elevation_dir = Path("elevation_data")
+    default_config = Path("opentopodata-config.yaml")
+
+    # Parse command line arguments
+    if len(sys.argv) > 1:
+        elevation_dir = Path(sys.argv[1])
+    else:
+        elevation_dir = default_elevation_dir
+
+    if len(sys.argv) > 2:
+        config_path = Path(sys.argv[2])
+    else:
+        config_path = default_config
+
+    print("=" * 70)
+    print("Elevation Data Preparation for OpenTopoData")
+    print("=" * 70)
+    print(f"\nElevation data directory: {elevation_dir.absolute()}")
+    print(f"Config file: {config_path.absolute()}")
+
+    # Step 1: Prepare elevation data (deduplicate, clean up)
+    if not prepare_elevation_data(elevation_dir):
+        print("\n❌ Failed to prepare elevation data")
+        return 1
+
+    # Step 2: Update OpenTopoData config
+    if not update_opentopodata_config(elevation_dir, config_path):
+        print("\n❌ Failed to update OpenTopoData config")
+        return 1
+
+    print("\n" + "=" * 70)
+    print("✓ Elevation data preparation complete!")
+    print("=" * 70)
+    print("\nNext steps:")
+    print("  1. Restart OpenTopoData to load the new configuration")
+    print("  2. Test with a sample query")
+    print("\nDatasets are prioritized as follows:")
+    print("  1. NED 10m (US-only, highest accuracy)")
+    print("  2. SRTM 30m (60°N to 56°S, gold standard)")
+    print("  3. AW3D30 (global coverage)")
+    print("  4. ASTER GDEM (tertiary fallback)")
+    print("  5. ArcticDEM 32m (Arctic >60°N)")
+    print("  6. REMA 32m (Antarctica <60°S)")
+    print("\nOverlapping tiles have been removed to keep the highest priority version.")
+    print("=" * 70)
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

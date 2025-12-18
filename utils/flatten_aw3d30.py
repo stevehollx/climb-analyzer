@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+"""
+Flatten AW3D30 directory structure.
+
+Moves all ALPSMLC30_*_DSM.tif files from nested subdirectories to the main
+aw3d30 directory, then removes the empty subdirectories.
+"""
+
+import shutil
+from pathlib import Path
+
+
+def flatten_aw3d30(elevation_data_dir: Path = None):
+    """
+    Flatten AW3D30 directory structure.
+
+    Args:
+        elevation_data_dir: Path to elevation_data directory (defaults to ../elevation_data)
+    """
+    if elevation_data_dir is None:
+        elevation_data_dir = Path(__file__).parent.parent / "data/elevation_data"
+
+    aw3d30_dir = elevation_data_dir / "aw3d30"
+
+    if not aw3d30_dir.exists():
+        print(f"AW3D30 directory not found: {aw3d30_dir}")
+        return
+
+    print(f"Flattening AW3D30 directory: {aw3d30_dir}")
+
+    # Find all DSM.tif files in subdirectories
+    dsm_files = list(aw3d30_dir.rglob("ALPSMLC30_*_DSM.tif"))
+
+    # Filter to only get files that are in subdirectories (not already at top level)
+    nested_files = [f for f in dsm_files if f.parent != aw3d30_dir]
+
+    if not nested_files:
+        print("No nested files found - directory already flat")
+        return
+
+    print(f"Found {len(nested_files)} nested DSM files to move")
+
+    # Move each file to top level
+    moved_count = 0
+    skipped_count = 0
+
+    for dsm_file in nested_files:
+        dest_file = aw3d30_dir / dsm_file.name
+
+        if dest_file.exists():
+            print(f"  Skipping {dsm_file.name} (already exists at top level)")
+            skipped_count += 1
+        else:
+            try:
+                shutil.move(str(dsm_file), str(dest_file))
+                moved_count += 1
+                if moved_count % 100 == 0:
+                    print(f"  Moved {moved_count} files...")
+            except Exception as e:
+                print(f"  Error moving {dsm_file.name}: {e}")
+
+    print(f"\nMoved {moved_count} files, skipped {skipped_count} duplicates")
+
+    # Find and remove empty subdirectories
+    # Only remove directories that match the pattern N0*
+    subdirs = [d for d in aw3d30_dir.iterdir() if d.is_dir() and d.name.startswith("N0")]
+
+    removed_count = 0
+    for subdir in subdirs:
+        try:
+            # Remove directory and all its contents (should be empty or just metadata files)
+            shutil.rmtree(subdir)
+            removed_count += 1
+        except Exception as e:
+            print(f"  Error removing {subdir.name}: {e}")
+
+    print(f"Removed {removed_count} subdirectories")
+    print("\n✓ AW3D30 directory flattened successfully")
+
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) > 1:
+        elevation_dir = Path(sys.argv[1])
+    else:
+        elevation_dir = None
+
+    flatten_aw3d30(elevation_dir)

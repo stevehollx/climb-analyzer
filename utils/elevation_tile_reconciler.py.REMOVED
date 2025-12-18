@@ -1,0 +1,236 @@
+#!/usr/bin/env python3
+"""
+Elevation Tile Reconciliation
+
+Manages overlapping elevation tiles across different datasets based on priority.
+Priority order (1 = highest, keep these tiles):
+1. REMA 32m
+2. ArcticDEM 32m
+3. REMA
+4. NED
+5. SRTM
+6. AW3D30
+7. ASTER
+"""
+
+import re
+from pathlib import Path
+from typing import Dict, List, Tuple
+
+# Dataset priority (lower number = higher priority = keep these tiles)
+DATASET_PRIORITY = {
+    "rema32m": 1,
+    "arcticdem32m": 2,
+    "rema": 3,
+    "ned10m": 4,
+    "srtm30m": 5,
+    "aw3d30": 6,
+    "aster30m": 7,
+}
+
+
+def extract_tile_coords(filename: str, dataset_name: str) -> Tuple[str, str] | None:
+    """
+    Extract tile coordinates from filename.
+
+    Returns (latitude, longitude) as strings, e.g., ('N46', 'E009')
+    Returns None if coordinates can't be extracted.
+    """
+    # SRTM/NED/AW3D30 format: N##W### or N##E### (with or without USGS prefix)
+    # Examples: N30W082.hgt, USGS_13_n30w082.tif, N045E005.tif
+    srtm_match = re.search(r"[NS](\d{2,3})[EW](\d{2,3})", filename, re.IGNORECASE)
+    if srtm_match:
+        # Normalize to uppercase
+        coords = re.search(r"([NS]\d{2,3}[EW]\d{2,3})", filename, re.IGNORECASE)
+        if coords:
+            return coords.group(1).upper()
+
+    # ASTER format: ASTGTMV003_N##E###_dem.tif
+    # Example: ASTGTMV003_N46E009_dem.tif
+    aster_match = re.search(r"ASTGTMV003_([NS]\d{2}[EW]\d{3})", filename)
+    if aster_match:
+        return aster_match.group(1).upper()
+
+    # REMA/ArcticDEM might have different formats - add as needed
+    # For now, return None for unknown formats
+    return None
+
+
+def get_dataset_tiles(dataset_dir: Path, dataset_name: str) -> Dict[str, List[Path]]:
+    """
+    Get all tiles from a dataset directory, grouped by coordinates.
+
+    Returns:
+        Dict mapping coordinates (e.g., 'N46E009') to list of file paths
+    """
+    if not dataset_dir.exists():
+        return {}
+
+    tiles_by_coords = {}
+
+    # Get all potential elevation files
+    patterns = ["*.tif", "*.hgt", "*.img", "*.vrt"]
+    for pattern in patterns:
+        for file_path in dataset_dir.glob(pattern):
+            coords = extract_tile_coords(file_path.name, dataset_name)
+            if coords:
+                if coords not in tiles_by_coords:
+                    tiles_by_coords[coords] = []
+                tiles_by_coords[coords].append(file_path)
+
+    return tiles_by_coords
+
+
+def reconcile_elevation_tiles(elevation_data_dir: Path, dry_run: bool = False) -> Dict[str, int]:
+    """
+    Reconcile overlapping tiles across all elevation datasets.
+
+    For each coordinate, keeps only the highest-priority dataset's tiles
+    and removes lower-priority duplicates.
+
+    Args:
+        elevation_data_dir: Path to elevation_data directory
+        dry_run: If True, only report what would be deleted without actually deleting
+
+    Returns:
+        Dict with statistics about removed tiles per dataset
+    """
+    print("=" * 70)
+    print("  ELEVATION TILE RECONCILIATION")
+    print("=" * 70)
+    print("\nDataset priority order (1=highest, keep these):")
+    for dataset, priority in sorted(DATASET_PRIORITY.items(), key=lambda x: x[1]):
+        print(f"  {priority}. {dataset}")
+    print()
+
+    # Collect all tiles from all datasets
+    all_tiles = {}  # coords -> {dataset: [files]}
+    dataset_dirs = {}
+
+    for dataset_name in DATASET_PRIORITY.keys():
+        dataset_dir = elevation_data_dir / dataset_name
+        if dataset_dir.exists():
+            dataset_dirs[dataset_name] = dataset_dir
+            tiles = get_dataset_tiles(dataset_dir, dataset_name)
+
+            if tiles:
+                print(f"{dataset_name}: {len(tiles)} unique tile coordinates")
+                for coords, files in tiles.items():
+                    if coords not in all_tiles:
+                        all_tiles[coords] = {}
+                    all_tiles[coords][dataset_name] = files
+
+    if not all_tiles:
+        print("\n✓ No tiles found to reconcile")
+        return {}
+
+    # Find and resolve overlaps
+    print(f"\nAnalyzing {len(all_tiles)} unique tile coordinates...")
+
+    overlaps_found = 0
+    removal_stats = dict.fromkeys(DATASET_PRIORITY.keys(), 0)
+
+    for coords, datasets_with_tile in all_tiles.items():
+        if len(datasets_with_tile) > 1:
+            # Multiple datasets have this coordinate - overlap detected
+            overlaps_found += 1
+
+            # Find highest priority dataset
+            datasets_sorted = sorted(datasets_with_tile.keys(), key=lambda d: DATASET_PRIORITY[d])
+            winner = datasets_sorted[0]
+            losers = datasets_sorted[1:]
+
+            print(f"\n  📍 {coords}:")
+            print(f"     ✅ Keeping: {winner} (priority {DATASET_PRIORITY[winner]})")
+
+            # Remove lower-priority tiles
+            for loser in losers:
+                files_to_remove = datasets_with_tile[loser]
+                print(
+                    f"     ❌ Removing: {loser} (priority {DATASET_PRIORITY[loser]}) - {len(files_to_remove)} file(s)"
+                )
+
+                for file_path in files_to_remove:
+                    if dry_run:
+                        print(f"        [DRY RUN] Would delete: {file_path.name}")
+                    else:
+                        try:
+                            file_path.unlink()
+                            print(f"        Deleted: {file_path.name}")
+                            removal_stats[loser] += 1
+                        except Exception as e:
+                            print(f"        ⚠️  Failed to delete {file_path.name}: {e}")
+
+    # Print summary
+    print("\n" + "=" * 70)
+    print("  RECONCILIATION SUMMARY")
+    print("=" * 70)
+    print(f"\nOverlapping coordinates found: {overlaps_found}")
+    print("\nFiles removed by dataset:")
+    total_removed = 0
+    for dataset, count in removal_stats.items():
+        if count > 0:
+            print(f"  • {dataset}: {count} file(s)")
+            total_removed += count
+
+    if total_removed == 0:
+        print("  ✓ No files removed (no overlaps or dry run)")
+    else:
+        print(f"\n✅ Total files removed: {total_removed}")
+
+    return removal_stats
+
+
+def check_dataset_has_files(dataset_dir: Path) -> bool:
+    """
+    Check if a dataset directory has any elevation data files.
+
+    Returns:
+        True if directory has data files, False otherwise
+    """
+    if not dataset_dir.exists():
+        return False
+
+    patterns = ["*.tif", "*.hgt", "*.img", "*.vrt"]
+    for pattern in patterns:
+        if list(dataset_dir.glob(pattern)):
+            return True
+
+    return False
+
+
+def main():
+    """Run reconciliation as standalone script."""
+    import sys
+    from pathlib import Path
+
+    # Determine elevation data directory
+    if len(sys.argv) > 1:
+        elevation_data_dir = Path(sys.argv[1])
+    else:
+        elevation_data_dir = Path("elevation_data")
+
+    if not elevation_data_dir.exists():
+        print(f"❌ Elevation data directory not found: {elevation_data_dir}")
+        sys.exit(1)
+
+    # Check for --dry-run flag
+    dry_run = "--dry-run" in sys.argv
+    if dry_run:
+        print("DRY RUN MODE - No files will be deleted\n")
+
+    # Run reconciliation
+    stats = reconcile_elevation_tiles(elevation_data_dir, dry_run=dry_run)
+
+    # Print final status
+    print("\n" + "=" * 70)
+    for dataset_name in DATASET_PRIORITY.keys():
+        dataset_dir = elevation_data_dir / dataset_name
+        has_files = check_dataset_has_files(dataset_dir)
+        status = "✓ Has data" if has_files else "⚠️  Empty (will be excluded from config)"
+        print(f"  {dataset_name}: {status}")
+    print("=" * 70)
+
+
+if __name__ == "__main__":
+    main()

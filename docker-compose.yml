@@ -1,0 +1,76 @@
+services:
+  # Note: OpenTopoData is managed separately via opentopodata/Makefile
+  # Use: cd opentopodata && make build && make daemon
+  # The container will be on the same Docker network and accessible at localhost:5000
+
+  # Climb Analyzer - Main application
+  climb-analyzer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: climb-analyzer
+    container_name: climb-analyzer
+    # Run as host user to avoid permission issues with mounted volumes
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    # Add docker group for Docker socket access (allows rebuilding OpenTopoData from container)
+    group_add:
+      - "${DOCKER_GID:-999}"
+    # Note: opentopodata dependency removed - will be started manually when needed for local mode
+    # For cloud mode, this container runs standalone without opentopodata
+    volumes:
+      # Mount data directories (read-only or managed by container)
+      - ./data/planet_osm_data:/app/data/planet_osm_data
+      - ./data/osm_indexes:/app/data/osm_indexes
+      - ./data/elevation_data:/app/data/elevation_data
+      # Mount output directory to host (so results are accessible)
+      - ./output:/app/output
+      # Mount checkpoints directory to host (so progress is saved)
+      - ./data/checkpoint_data:/app/data/checkpoint_data
+      # Mount credentials directory to persist NASA Earthdata login
+      - ./.credentials:/app/.credentials
+      # Mount config (create if not exists)
+      - ./config.yaml:/app/config.yaml
+      # Mount source code for development (comment out for production)
+      - .:/app
+      # Mount Docker socket to allow rebuilding opentopodata from within container
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - TOPO_API_BASE_URL=http://opentopodata-server:5000/v1
+      - PYTHONUNBUFFERED=1
+      # Prevent Python from writing .pyc files (ensures fresh code on every run)
+      - PYTHONDONTWRITEBYTECODE=1
+      # Pass through NASA Earthdata credentials from host (via .env file or shell export)
+      - EARTHDATA_USER=${EARTHDATA_USER:-}
+      - EARTHDATA_PASS=${EARTHDATA_PASS:-}
+      # Host project directory for Docker-in-Docker operations
+      - HOST_PROJECT_DIR=${PWD}
+      # Host user/group IDs for fixing file ownership
+      - HOST_UID=${HOST_UID:-1000}
+      - HOST_GID=${HOST_GID:-1000}
+      # Docker-in-Docker configuration (avoid /.docker permission error)
+      - HOME=/app
+      - DOCKER_CONFIG=/app/.docker
+    networks:
+      - climb-network
+    # Expose port 3000 for web GUI
+    ports:
+      - "3000:3000"
+    # Interactive mode by default
+    stdin_open: true
+    tty: true
+    # Override command as needed:
+    # docker-compose run --rm climb-analyzer python data_setup.py
+    # docker-compose run --rm climb-analyzer python climb_analyzer.py --batch --scope state
+
+networks:
+  climb-network:
+    external: true
+
+volumes:
+  # Named volumes for output and checkpoints
+  # These are managed by Docker and avoid permission issues with host bind mounts
+  output-data:
+  checkpoint-data:
+  # Legacy volumes (can be removed if not used)
+  osm_data:
+  elevation_cache:

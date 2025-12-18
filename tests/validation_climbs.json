@@ -1,0 +1,264 @@
+{
+  "test_1": {
+    "test_name": "Georgia (Europe) - CLI",
+    "region": "Georgia",
+    "description": "European country Georgia via CLI with cross-country merge",
+    "climbs": [
+      {
+        "name": "Jvari Pass",
+        "alt_names": ["Jvari", "Cross Pass", "Georgian Military Road"],
+        "strava_segment_id": "8876890",
+        "expected_elev_gain_m": 2400,
+        "expected_length_km": 50,
+        "expected_avg_grade": 4.8
+      }
+    ]
+  },
+  "test_2": {
+    "test_name": "Luxembourg - Interactive",
+    "region": "Luxembourg",
+    "description": "Luxembourg via interactive menu",
+    "climbs": [
+      {
+        "name": "Mullerthal",
+        "alt_names": ["Muellerthal", "Little Switzerland"],
+        "strava_segment_id": null,
+        "expected_elev_gain_m": 150,
+        "expected_length_km": 3,
+        "expected_avg_grade": 5.0
+      }
+    ]
+  },
+  "test_3": {
+    "test_name": "Hawaii - CLI",
+    "region": "Hawaii",
+    "description": "Hawaii via CLI",
+    "climbs": [
+      {
+        "name": "Mauna Kea Access Road",
+        "alt_names": ["Mauna Kea Summit Road", "Saddle Road"],
+        "strava_segment_id": "612474",
+        "expected_elev_gain_m": 4200,
+        "expected_length_km": 42,
+        "expected_avg_grade": 10.0
+      },
+      {
+        "name": "Crater Rd",
+        "alt_names": ["Crater Road", "Haleakala Crater Road"],
+        "strava_segment_id": null,
+        "expected_elev_gain_m": 800,
+        "expected_length_km": 18,
+        "expected_avg_grade": 4.4
+      }
+    ]
+  },
+  "test_4": {
+    "test_name": "New York - Interactive + Paved",
+    "region": "New York",
+    "description": "New York via interactive with paved surface filter",
+    "climbs": [
+      {
+        "name": "Bear Mountain",
+        "alt_names": ["Perkins Memorial Drive", "Bear Mountain Road"],
+        "strava_segment_id": "628459",
+        "expected_elev_gain_m": 370,
+        "expected_length_km": 6.5,
+        "expected_avg_grade": 5.7
+      }
+    ]
+  },
+  "test_5": {
+    "test_name": "Bristol (UK) - Interactive",
+    "region": "Bristol",
+    "description": "Bristol UK via interactive menu",
+    "climbs": [
+      {
+        "name": "Dundry Lane",
+        "alt_names": ["Dundry Hill"],
+        "strava_segment_id": null,
+        "expected_elev_gain_m": 120,
+        "expected_length_km": 2.5,
+        "expected_avg_grade": 4.8
+      }
+    ]
+  },
+  "test_6": {
+    "test_name": "Worcestershire - CLI + Paved",
+    "region": "Worcestershire",
+    "description": "Worcestershire via CLI with paved filter",
+    "climbs": [
+      {
+        "name": "Fish Hill",
+        "alt_names": ["Broadway Tower", "Broadway Hill"],
+        "strava_segment_id": "628456",
+        "expected_elev_gain_m": 200,
+        "expected_length_km": 3,
+        "expected_avg_grade": 6.7
+      }
+    ]
+  },
+  "test_7": {
+    "test_name": "Isle of Wight - CLI + Cycling",
+    "region": "Isle of Wight",
+    "description": "Isle of Wight via CLI with cycling filter",
+    "climbs": [
+      {
+        "name": "St. Boniface Down",
+        "alt_names": ["Boniface Down", "St Boniface"],
+        "strava_segment_id": null,
+        "expected_elev_gain_m": 180,
+        "expected_length_km": 2.2,
+        "expected_avg_grade": 8.2
+      }
+    ]
+  },
+  "test_8": {
+    "test_name": "Rutland, Leicestershire - CLI Batch",
+    "region": "Rutland,Leicestershire",
+    "description": "Batch test for cross-region merge on Cold Overton Road",
+    "climbs": [
+      {
+        "name": "Cold Overton Road",
+        "alt_names": ["Cold Overton", "Overton Road"],
+        "cross_region_check": true,
+        "expected_regions": ["Rutland", "Leicestershire"],
+        "strava_segment_id": null,
+        "expected_elev_gain_m": 80,
+        "expected_length_km": 2,
+        "expected_avg_grade": 4.0
+      }
+    ]
+  },
+  "test_9": {
+    "test_name": "Luxembourg, Belgium - CLI Batch",
+    "region": "Luxembourg,Belgium",
+    "description": "Batch test for cross-country merge on Wemperhardt",
+    "climbs": [
+      {
+        "name": "Wemperhardt",
+        "alt_names": ["Wemperhard", "N7"],
+        "cross_region_check": true,
+        "expected_regions": ["Luxembourg", "Belgium"],
+        "strava_segment_id": null,
+        "expected_elev_gain_m": 150,
+        "expected_length_km": 3,
+        "expected_avg_grade": 5.0
+      }
+    ]
+  },
+  "test_10": {
+    "test_name": "Oregon, Idaho - CLI Batch",
+    "region": "Oregon,Idaho",
+    "description": "Batch test for cross-state climb on US Route 95",
+    "climbs": [
+      {
+        "name": "US Route 95",
+        "alt_names": ["ION Highway", "US-95", "Interstate Oregon-Nevada"],
+        "cross_region_check": true,
+        "expected_regions": ["Oregon", "Idaho"],
+        "strava_segment_id": null,
+        "expected_elev_gain_m": 500,
+        "expected_length_km": 20,
+        "expected_avg_grade": 2.5
+      }
+    ]
+  },
+  "test_11": {
+    "test_name": "China (Lijiang) - Custom Bbox",
+    "region": "custom_bbox",
+    "bbox": [27.1, 100.1, 27.3, 100.3],
+    "description": "Tiger Leaping Gorge area with custom geo boundaries",
+    "climbs": [
+      {
+        "name": "Tiger Leaping Gorge Road",
+        "alt_names": ["Hutiao Gorge", "Hutiaoxia"],
+        "strava_segment_id": null,
+        "expected_elev_gain_m": 800,
+        "expected_length_km": 15,
+        "expected_avg_grade": 5.3
+      }
+    ]
+  },
+  "test_12": {
+    "test_name": "Cleveland SC 30mi - CLI Address",
+    "region": "address",
+    "address": "8155 Geer Hwy, Cleveland, SC 29635",
+    "radius_miles": 30,
+    "description": "30-mile radius from Cleveland SC via CLI",
+    "climbs": [
+      {
+        "name": "Caesars Head",
+        "alt_names": ["Caesar's Head", "Caesars Head State Park"],
+        "strava_segment_id": "628123",
+        "expected_elev_gain_m": 600,
+        "expected_length_km": 8,
+        "expected_avg_grade": 7.5
+      }
+    ]
+  },
+  "test_13": {
+    "test_name": "Cleveland SC 30mi - Interactive Address",
+    "region": "address",
+    "address": "8155 Geer Hwy, Cleveland, SC 29635",
+    "radius_miles": 30,
+    "description": "30-mile radius from Cleveland SC via interactive",
+    "climbs": [
+      {
+        "name": "Caesars Head",
+        "alt_names": ["Caesar's Head", "Caesars Head State Park"],
+        "strava_segment_id": "628123",
+        "expected_elev_gain_m": 600,
+        "expected_length_km": 8,
+        "expected_avg_grade": 7.5
+      }
+    ]
+  },
+  "test_14": {
+    "test_name": "Georgia (Europe) - Interactive Early Exit",
+    "region": "Georgia",
+    "early_exit": true,
+    "expected_selection": "Europe > Georgia",
+    "description": "Verify interactive selects European Georgia, exit early"
+  },
+  "test_15": {
+    "test_name": "Georgia (Europe) - CLI Early Exit",
+    "region": "Georgia",
+    "early_exit": true,
+    "expected_selection": "georgia",
+    "description": "Verify CLI selects European Georgia, exit early"
+  },
+  "test_16": {
+    "test_name": "Georgia (US) - CLI Ambiguous",
+    "region": "Georgia",
+    "early_exit": true,
+    "expected_disambiguation": true,
+    "description": "Test CLI handling of ambiguous Georgia (US state vs country)"
+  },
+  "test_17": {
+    "test_name": "Georgia (US) - Interactive Early Exit",
+    "region": "Georgia",
+    "early_exit": true,
+    "expected_selection": "North America > United States > Georgia",
+    "description": "Verify interactive can select US state Georgia"
+  },
+  "test_18": {
+    "test_name": "Georgia (Europe), Luxembourg - CLI Batch Early Exit",
+    "region": "Georgia,Luxembourg",
+    "early_exit": true,
+    "expected_selection": ["georgia", "luxembourg"],
+    "description": "Batch mode with two European regions"
+  },
+  "test_19": {
+    "test_name": "Georgia (US), Luxembourg - CLI Batch Mixed",
+    "region": "Georgia,Luxembourg",
+    "early_exit": true,
+    "expected_selection": ["us/georgia", "luxembourg"],
+    "qualifier": "us",
+    "description": "Batch mode with mixed US state and European country"
+  },
+  "_metadata": {
+    "tolerance_percent": 15,
+    "version": "1.0.0",
+    "last_updated": "2025-12-16"
+  }
+}

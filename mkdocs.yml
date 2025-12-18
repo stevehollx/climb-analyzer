@@ -1,0 +1,94 @@
+site_name: Climb Analyzer
+site_description: Analyze road and trail climbs worldwide using OpenStreetMap data
+site_author: Steve Holl
+site_url: https://stevehollx.github.io/climb-analyzer/
+
+repo_name: stevehollx/climb-analyzer
+repo_url: https://github.com/stevehollx/climb-analyzer
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: deep orange
+      accent: orange
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: deep orange
+      accent: orange
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [.]
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/stevehollx/climb-analyzer
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quickstart.md
+    - Setup Wizard: getting-started/setup-wizard.md
+  - User Guide:
+    - CLI Reference: user-guide/cli-reference.md
+    - Interactive Mode: user-guide/interactive-mode.md
+    - Scoring Methods: user-guide/scoring-methods.md
+    - Output Format: user-guide/output-format.md
+  - Features:
+    - Checkpointing: features/checkpointing.md
+    - Cloud Cache: features/cloud-cache.md
+    - Web GUI: features/web-gui.md
+    - Large Country Analysis: features/large-countries.md
+  - Data:
+    - Elevation System: data/elevation-system.md
+    - Dataset Priorities: data/dataset-priorities.md
+    - Auto Provisioning: data/auto-provisioning.md
+    - Data Coverage: data/coverage-strategy.md
+  - Advanced:
+    - GitHub App Setup: advanced/github-app-setup.md
+    - Parallel Processing: advanced/parallel-processing.md
+    - Configuration: advanced/configuration.md
+  - Contributing:
+    - How to Contribute: contributing/how-to-contribute.md
+    - Cloud Cache Contributions: contributing/cloud-cache-contributions.md
+  - Reference:
+    - API Reference: reference/api.md
+    - Technical Architecture: reference/technical-architecture.md

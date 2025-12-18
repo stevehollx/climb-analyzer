@@ -1,0 +1,264 @@
+#!/usr/bin/env python3
+"""
+Data validation for local deployment.
+
+Checks if required OSM + DEM data exists before analysis.
+"""
+
+import sys
+import subprocess
+from pathlib import Path
+from typing import Tuple, List
+
+from utils.dataset_selector import get_required_datasets
+from climb_analyzer.data.geo_definitions import state_data
+
+
+def find_osm_file_for_region(region_name: str) -> Path:
+    """
+    Find OSM .pbf file for a region.
+
+    Prioritizes merged files (created for cross-border searches) over individual region files.
+
+    Args:
+        region_name: Name of region/country (or US state name)
+                    Can be:
+                    - Simple name: "liechtenstein"
+                    - Hierarchical path: "europe/liechtenstein"
+                    - Nested path: "north-america/us/california"
+
+    Returns:
+        Path to OSM file, or None if not found
+    """
+    planet_dir = Path("planet-osm")
+    if not planet_dir.exists():
+        return None
+
+    # Extract the actual region name from hierarchical path FIRST
+    # e.g., "europe/liechtenstein" -> "liechtenstein"
+    # e.g., "north-america/us/california" -> "california"
+    if '/' in region_name:
+        region_parts = region_name.split('/')
+        # Use the last part as the actual region name
+        actual_region_name = region_parts[-1]
+    else:
+        actual_region_name = region_name
+
+    # Normalize region name for matching
+    normalized_region = actual_region_name.lower().replace(" ", "-")
+
+    # PRIORITY 1: Check for merged files that contain this specific region
+    # Merged files are created when search area spans multiple regions
+    # Format: merged-<region1>-<region2>-<region3>-latest.osm.pbf
+    # Example: merged-north-carolina-south-carolina-tennessee-latest.osm.pbf
+    # IMPORTANT: Only use merged file if it actually contains the region we're searching
+    merged_files = list(planet_dir.glob("merged-*.osm.pbf"))
+    if merged_files:
+        # Check if any merged file contains this region in its name
+        for merged_file in merged_files:
+            # Extract region names from merged filename
+            # merged-north-carolina-south-carolina-tennessee-latest.osm.pbf
+            # -> check if "georgia" is in the name
+            filename_lower = merged_file.stem.lower()
+            if filename_lower.startswith("merged-") and filename_lower.endswith("-latest"):
+                # Remove "merged-" prefix and "-latest" suffix
+                regions_part = filename_lower[7:-7]  # Remove "merged-" and "-latest"
+
+                # Check if our normalized region appears in the merged filename
+                # For "georgia" searching in "north-carolina-south-carolina-tennessee":
+                #   - Check if "georgia" is in the full string (handles multi-word regions)
+                #   - Use word boundary check: ensure it's a complete region name
+                # Split on hyphens to get individual words, then reconstruct possible region names
+                # E.g., "north-carolina-south-carolina" -> ["north", "carolina", "south", "carolina"]
+                # Then check combinations: "north", "carolina", "north-carolina", "south", "south-carolina"
+
+                # Simple approach: check if normalized_region appears as a complete segment
+                # Split the regions_part by known delimiters and check
+                region_segments = regions_part.split("-")
+
+                # Build all possible multi-word combinations (up to 3 words)
+                possible_regions = []
+                for i in range(len(region_segments)):
+                    # Single word
+                    possible_regions.append(region_segments[i])
+                    # Two words
+                    if i + 1 < len(region_segments):
+                        possible_regions.append(f"{region_segments[i]}-{region_segments[i+1]}")
+                    # Three words
+                    if i + 2 < len(region_segments):
+                        possible_regions.append(f"{region_segments[i]}-{region_segments[i+1]}-{region_segments[i+2]}")
+
+                # Check if our region matches any of these combinations
+                if normalized_region in possible_regions:
+                    return merged_file
+
+        # No merged file contains this region - continue to individual files
+
+    # PRIORITY 2: Check if this is a US state
+    if actual_region_name in state_data:
+        # Look for state-specific file first (e.g., hawaii-latest.osm.pbf)
+        state_normalized = actual_region_name.lower().replace(" ", "-")
+        for pbf_file in planet_dir.glob("*.osm.pbf"):
+            stem_lower = pbf_file.stem.lower()
+            # Skip merged files (already checked)
+            if stem_lower.startswith("merged-"):
+                continue
+            if state_normalized in stem_lower:
+                return pbf_file
+
+        # If no state file, look for whole United States OSM file
+        us_patterns = ["united-states", "us-latest", "usa"]
+        for pbf_file in planet_dir.glob("*.osm.pbf"):
+            stem_lower = pbf_file.stem.lower()
+            if stem_lower.startswith("merged-"):
+                continue
+            if any(pattern in stem_lower for pattern in us_patterns):
+                return pbf_file
+
+        # No US or state file found
+        return None
+
+    # PRIORITY 3: Try exact match for country/region name
+    normalized_name = actual_region_name.lower().replace(" ", "-")
+    for pbf_file in planet_dir.glob("*.osm.pbf"):
+        stem_lower = pbf_file.stem.lower()
+        if stem_lower.startswith("merged-"):
+            continue
+        if normalized_name in stem_lower:
+            return pbf_file
+
+    # No exact match found
+    return None
+
+
+def validate_local_data(
+    region_name: str,
+    lat_min: float,
+    lat_max: float,
+    lon_min: float,
+    lon_max: float,
+    deployment_type: str = 'local'
+) -> Tuple[bool, List[str]]:
+    """
+    Validate that all required data exists for local deployment.
+
+    Args:
+        region_name: Name of region (e.g., "Switzerland")
+        lat_min, lat_max, lon_min, lon_max: Bounding box
+        deployment_type: 'local' or 'cloud' (default: 'local')
+
+    Returns:
+        (is_valid, list_of_missing_items)
+    """
+    missing = []
+
+    # Check OSM .pbf file
+    osm_file = find_osm_file_for_region(region_name)
+    if not osm_file or not osm_file.exists():
+        # Provide helpful message for US states
+        if region_name in state_data:
+            missing.append(f"OSM data file (.pbf) for United States (needed for {region_name})")
+        else:
+            missing.append(f"OSM data file (.pbf) for {region_name}")
+
+    # Check spatial index
+    if osm_file:
+        from climb_analyzer.data.spatial_index import SpatialIndexManager
+        index_mgr = SpatialIndexManager(str(osm_file), cache_dir="data/osm_indexes")
+        if not index_mgr.exists():
+            missing.append(f"Spatial index for {osm_file.name}")
+
+    # Check DEM data - check for actual file patterns, not subdirectories
+    required_datasets = get_required_datasets(lat_min, lat_max, lon_min, lon_max, deployment_type)
+    elevation_dir = Path("data/elevation_data")
+
+    for dataset in required_datasets:
+        dataset_found = False
+
+        if dataset == 'srtm30m':
+            # SRTM files are stored as N##E###.hgt directly in elevation_data/
+            srtm_files = list(elevation_dir.glob("*.hgt"))
+            dataset_found = len(srtm_files) > 0
+
+        elif dataset == 'aw3d30':
+            # AW3D30 files are stored in subdirectories like N045E005/, N050E005/
+            aw3d_dirs = [d for d in elevation_dir.iterdir() if d.is_dir() and d.name.startswith('N')]
+            dataset_found = len(aw3d_dirs) > 0
+
+        elif dataset == 'aster':
+            # ASTER files are stored as ASTGTMV003_*.tif directly in elevation_data/
+            aster_files = list(elevation_dir.glob("ASTGTMV003_*_dem.tif"))
+            dataset_found = len(aster_files) > 0
+
+        elif dataset == 'ned10m':
+            # NED files - check for common patterns
+            ned_files = list(elevation_dir.glob("*ned*.tif")) + list(elevation_dir.glob("*NED*.tif"))
+            dataset_found = len(ned_files) > 0
+
+        elif dataset == 'arcticdem':
+            # ArcticDEM files
+            arctic_files = list(elevation_dir.glob("*arctic*.tif"))
+            dataset_found = len(arctic_files) > 0
+
+        elif dataset == 'rema':
+            # REMA files
+            rema_files = list(elevation_dir.glob("*rema*.tif"))
+            dataset_found = len(rema_files) > 0
+
+        if not dataset_found:
+            missing.append(f"DEM dataset: {dataset}")
+
+    return (len(missing) == 0, missing)
+
+
+def ensure_data_available(
+    region_name: str,
+    lat_min: float,
+    lat_max: float,
+    lon_min: float,
+    lon_max: float
+) -> bool:
+    """
+    Ensure all required data is available. Automatically downloads if missing.
+
+    This is a wrapper around validate_and_prepare_data() for backward compatibility.
+
+    Args:
+        region_name: Name of region
+        lat_min, lat_max, lon_min, lon_max: Bounding box
+
+    Returns:
+        True if data is available (or successfully downloaded)
+    """
+    from data_coverage_checker import validate_and_prepare_data
+
+    # Determine scope type based on region_name
+    # Check if it's a US state
+    if region_name in state_data:
+        scope_type = "state"
+    else:
+        scope_type = "country"
+
+    # Use the new auto-download logic
+    return validate_and_prepare_data(scope_type, region_name)
+
+
+# Test if run directly
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) > 1:
+        region = sys.argv[1]
+        # Test bounds (approximate)
+        is_valid, missing = validate_local_data(region, 40, 50, 5, 15)
+
+        if is_valid:
+            print(f"✓ All data available for {region}")
+        else:
+            print(f"❌ Missing data for {region}:")
+            for item in missing:
+                print(f"  • {item}")
+    else:
+        print("Usage: python data_validator.py <region_name>")
+        print("\nExample:")
+        print("  python data_validator.py Switzerland")
