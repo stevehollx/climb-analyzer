@@ -74,6 +74,24 @@ from typing import Dict, List, Tuple
 from tqdm import tqdm
 
 
+# Custom unpickler to handle module remapping for classes serialized from __main__
+class _MergerUnpickler(pickle.Unpickler):
+    """Custom unpickler that remaps classes serialized from __main__ to correct modules."""
+
+    def find_class(self, module, name):
+        if module == "__main__":
+            if name in ("ClimbMetrics", "ClimbIdentifier", "SimpleClimbNode", "ElevationProfile"):
+                module = "climb_analyzer.engine"
+            elif name == "ErrorLogEntry":
+                module = "climb_analyzer.data.elevation"
+        return super().find_class(module, name)
+
+
+def _safe_pickle_load(file_handle):
+    """Load pickle data using custom unpickler that handles __main__ class remapping."""
+    return _MergerUnpickler(file_handle).load()
+
+
 def _merge_street_batch_worker_top_level(args):
     """
     Top-level worker function for parallel street merging.
@@ -1473,7 +1491,7 @@ class BoundaryMerger:
             if batch_checkpoint_file.exists():
                 try:
                     with open(batch_checkpoint_file, 'rb') as f:
-                        batch_results = pickle.load(f)
+                        batch_results = _safe_pickle_load(f)
                     merged_segments.extend(batch_results)
 
                     # Delete checkpoint file to free disk space
@@ -1531,14 +1549,21 @@ class BoundaryMerger:
         checkpoint_interval = max(1, len(segments_by_name_remaining) // 20)
         street_items = list(segments_by_name_remaining.items())
 
+        # Calculate total for proper progress display (processed + remaining)
+        total_streets = streets_processed + len(street_items)
+
         with tqdm(
-            total=len(street_items),
-            desc="Processing remaining streets",
+            total=total_streets,
+            initial=streets_processed,  # Show already-processed streets
+            desc="Processing streets",
             unit="streets",
             dynamic_ncols=True,
             ascii=" ▏▎▍▌▋▊▉█",
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]",
         ) as pbar:
+            # Force immediate render when resuming
+            if streets_processed > 0:
+                pbar.refresh()
             for i, (street_name, street_segments) in enumerate(street_items):
                 try:
                     merged_street_segments = self._merge_segments_for_street(

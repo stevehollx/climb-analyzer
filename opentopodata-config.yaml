@@ -13,10 +13,5 @@ datasets:
   filename_epsg: 4326
   filename_tile_size: 1
   filename_pattern: '{lat}{lon}.tif'
-- name: aster30m
-  path: data/aster30m/
-  filename_epsg: 4326
-  filename_tile_size: 1
-  filename_pattern: ASTGTMV003_{lat}{lon}_dem.tif
 max_locations_per_request: 500
 access_control_allow_origin: '*'

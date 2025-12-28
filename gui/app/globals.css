@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 9%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 9%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 9%;
+
+    --primary: 221 83% 53%;
+    --primary-foreground: 0 0% 100%;
+
+    --accent: 220 14% 96%;
+    --accent-foreground: 0 0% 9%;
+
+    --muted: 220 14% 96%;
+    --muted-foreground: 0 0% 42%;
+
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 221 83% 53%;
+  }
+}
+
+body {
+  color: hsl(var(--foreground));
+  background: hsl(var(--background));
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+/* MapLibre popup close button - add padding from right edge and make bigger */
+.maplibregl-popup-close-button {
+  right: 8px !important;
+  top: 8px !important;
+  font-size: 24px !important;
+  width: 28px !important;
+  height: 28px !important;
+  line-height: 28px !important;
+}

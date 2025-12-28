@@ -243,6 +243,36 @@ else:
     import overpy
 
 
+# Custom unpickler to handle module remapping for classes serialized from __main__
+# This fixes "Can't get attribute 'ClimbMetrics' on <module '__main__'>" errors
+class ClimbAnalyzerUnpickler(pickle.Unpickler):
+    """Custom unpickler that remaps classes serialized from __main__ to correct modules."""
+
+    def find_class(self, module, name):
+        # Remap classes that were pickled from __main__ to their actual module location
+        if module == "__main__":
+            if name == "ClimbMetrics":
+                module = "climb_analyzer.engine"
+            elif name == "ClimbIdentifier":
+                module = "climb_analyzer.engine"
+            elif name == "SimpleClimbNode":
+                module = "climb_analyzer.engine"
+            elif name == "ElevationProfile":
+                module = "climb_analyzer.engine"
+            elif name == "ErrorLogEntry":
+                module = "climb_analyzer.data.elevation"
+        return super().find_class(module, name)
+
+
+def safe_pickle_load(file_handle):
+    """Load pickle data using custom unpickler that handles __main__ class remapping.
+
+    Use this instead of pickle.load() when loading checkpoint data that may contain
+    ClimbMetrics or other classes that were serialized from different module contexts.
+    """
+    return ClimbAnalyzerUnpickler(file_handle).load()
+
+
 # Global verbose flag - set by main() after argument parsing
 _VERBOSE_MODE = False
 
@@ -2323,28 +2353,28 @@ DATASET_PRIORITY_BY_REGION_CLOUD = {
     "West Virginia": ["ned10m", "srtm30m"],
     "Wisconsin": ["ned10m", "srtm30m"],
     "Wyoming": ["ned10m", "srtm30m"],
-    # Alaska - Cloud mode uses ASTER only
-    "Alaska": ["aster30m"],
+    # Alaska - Cloud mode uses SRTM (limited coverage at high latitudes)
+    "Alaska": ["srtm30m"],
     # Canada - split by latitude
-    "Canada": ["srtm30m", "aster30m"],  # Southern Canada
-    "Canada (>60°N)": ["aster30m"],  # Northern Canada - cloud mode
+    "Canada": ["srtm30m"],  # Southern Canada
+    "Canada (>60°N)": ["srtm30m"],  # Northern Canada - cloud mode (limited coverage)
     # Greenland - Not supported in cloud mode
     "Greenland": [],
-    # Nordic countries - Cloud mode uses ASTER with SRTM for <60N
-    "Iceland": ["aster30m"],  # All Iceland is >60N
-    "Norway": ["srtm30m", "aster30m"],  # Southern Norway (<60N)
-    "Norway (>60°N)": ["aster30m"],  # Northern Norway - cloud mode
-    "Sweden": ["srtm30m", "aster30m"],  # Southern Sweden (<60N)
-    "Sweden (>60°N)": ["aster30m"],  # Northern Sweden - cloud mode
-    "Finland": ["srtm30m", "aster30m"],  # Southern Finland (<60N)
-    "Finland (>60°N)": ["aster30m"],  # Northern Finland - cloud mode
+    # Nordic countries - SRTM for <60N only
+    "Iceland": ["srtm30m"],  # Limited coverage - mostly >60N
+    "Norway": ["srtm30m"],  # Southern Norway (<60N)
+    "Norway (>60°N)": ["srtm30m"],  # Northern Norway - cloud mode (limited coverage)
+    "Sweden": ["srtm30m"],  # Southern Sweden (<60N)
+    "Sweden (>60°N)": ["srtm30m"],  # Northern Sweden - cloud mode (limited coverage)
+    "Finland": ["srtm30m"],  # Southern Finland (<60N)
+    "Finland (>60°N)": ["srtm30m"],  # Northern Finland - cloud mode (limited coverage)
     # Russia - split by latitude
-    "Russia": ["srtm30m", "aster30m"],  # Southern Russia
-    "Russia (>60°N)": ["aster30m"],  # Northern Russia - cloud mode
+    "Russia": ["srtm30m"],  # Southern Russia
+    "Russia (>60°N)": ["srtm30m"],  # Northern Russia - cloud mode (limited coverage)
     # Antarctica - Not supported in cloud mode
     "Antarctica": [],
     # Default for most non-US countries
-    "_default": ["srtm30m", "aster30m"],
+    "_default": ["srtm30m"],
 }
 
 # Local mode dataset priority (full dataset availability)
@@ -2402,27 +2432,27 @@ DATASET_PRIORITY_BY_REGION = {
     "Wisconsin": ["ned10m", "srtm30m"],
     "Wyoming": ["ned10m", "srtm30m"],
     # Alaska - Local mode has full Arctic datasets
-    "Alaska": ["arctic32m", "aw3d30", "aster30m"],
+    "Alaska": ["arctic32m", "aw3d30"],
     # Canada - split by latitude
-    "Canada": ["srtm30m", "aw3d30", "aster30m"],  # Southern Canada
-    "Canada (>60°N)": ["arctic32m", "aw3d30", "aster30m"],  # Northern Canada
-    # Greenland - Arctic (all >60N)
-    "Greenland": ["arctic32m", "aw3d30", "aster30m"],
+    "Canada": ["srtm30m", "aw3d30"],  # Southern Canada
+    "Canada (>60°N)": ["arctic32m", "aw3d30"],  # Northern Canada
+    # Greenland - Arctic (all >60N) - ArcticDEM only (no other datasets available)
+    "Greenland": ["arctic32m"],
     # Nordic countries - Arctic with latitude-based switching
-    "Iceland": ["arctic32m", "aw3d30", "aster30m"],  # All Iceland is >60N
-    "Norway": ["srtm30m", "aw3d30", "aster30m"],  # Southern Norway (<60N)
-    "Norway (>60°N)": ["arctic32m", "aw3d30", "aster30m"],  # Northern Norway
-    "Sweden": ["srtm30m", "aw3d30", "aster30m"],  # Southern Sweden (<60N)
-    "Sweden (>60°N)": ["arctic32m", "aw3d30", "aster30m"],  # Northern Sweden
-    "Finland": ["srtm30m", "aw3d30", "aster30m"],  # Southern Finland (<60N)
-    "Finland (>60°N)": ["arctic32m", "aw3d30", "aster30m"],  # Northern Finland
+    "Iceland": ["arctic32m", "aw3d30"],  # All Iceland is >60N
+    "Norway": ["srtm30m", "aw3d30"],  # Southern Norway (<60N)
+    "Norway (>60°N)": ["arctic32m", "aw3d30"],  # Northern Norway
+    "Sweden": ["srtm30m", "aw3d30"],  # Southern Sweden (<60N)
+    "Sweden (>60°N)": ["arctic32m", "aw3d30"],  # Northern Sweden
+    "Finland": ["srtm30m", "aw3d30"],  # Southern Finland (<60N)
+    "Finland (>60°N)": ["arctic32m", "aw3d30"],  # Northern Finland
     # Russia - split by latitude
-    "Russia": ["srtm30m", "aw3d30", "aster30m"],  # Southern Russia
-    "Russia (>60°N)": ["arctic32m", "aw3d30", "aster30m"],  # Northern Russia
-    # Antarctica
-    "Antarctica": ["rema32m", "aw3d30", "aster30m"],
+    "Russia": ["srtm30m", "aw3d30"],  # Southern Russia
+    "Russia (>60°N)": ["arctic32m", "aw3d30"],  # Northern Russia
+    # Antarctica - REMA only (no other datasets available)
+    "Antarctica": ["rema32m"],
     # Default for most non-US countries
-    "_default": ["srtm30m", "aw3d30", "aster30m"],
+    "_default": ["srtm30m", "aw3d30"],
 }
 
 
@@ -2569,6 +2599,9 @@ class FastElevationFetcher:
         # Track datasets that returned 404 (not available) - skip these for entire session
         self.unavailable_datasets = set()
 
+        # Track if we've attempted config sync after "not in config" error (only try once)
+        self._config_sync_attempted = False
+
         # Track elevation fetch statistics for error reporting
         self.total_coords_requested = 0
         self.total_coords_failed = 0
@@ -2600,7 +2633,7 @@ class FastElevationFetcher:
         else:
             # Standard fallback sequence based on availability
             # Include primary dataset as first in cascade
-            return [self.primary_dataset, "srtm30m", "aw3d30", "aster30m"]
+            return [self.primary_dataset, "srtm30m", "aw3d30"]
 
     def _build_multi_dataset_url(self) -> str:
         """Build URL with comma-separated datasets for optimized fallback"""
@@ -3165,6 +3198,30 @@ class FastElevationFetcher:
 
                                 match = re.search(r"Dataset '([^']+)' not in config", error_msg)
                                 bad_dataset = match.group(1) if match else dataset_name
+
+                                # Try auto-recovery ONCE by syncing server config
+                                if not self._config_sync_attempted:
+                                    self._config_sync_attempted = True
+                                    with self._print_lock:
+                                        print(f"\n  ⚠️  Dataset '{bad_dataset}' not in server config")
+                                        print("  Attempting automatic server reconfiguration...")
+
+                                    try:
+                                        from utils.opentopodata_manager import rebuild_and_restart
+                                        if rebuild_and_restart(auto_update_config=True, validate_health=True):
+                                            with self._print_lock:
+                                                print("  ✓ Server reconfigured - retrying request")
+                                            # Clear unavailable datasets - they may be available now
+                                            self.unavailable_datasets.clear()
+                                            self.http_400_shown_datasets.clear()
+                                            # Retry this request
+                                            continue
+                                        else:
+                                            with self._print_lock:
+                                                print("  ⚠️  Config sync failed - continuing with fallback datasets")
+                                    except Exception as e:
+                                        with self._print_lock:
+                                            print(f"  ⚠️  Config sync error: {e}")
 
                                 # Mark this dataset as unavailable for entire session
                                 self.unavailable_datasets.add(bad_dataset)
@@ -6818,7 +6875,7 @@ class BoundaryMerger:
             if batch_checkpoint_file.exists():
                 try:
                     with open(batch_checkpoint_file, "rb") as f:
-                        batch_results = pickle.load(f)
+                        batch_results = safe_pickle_load(f)
                     merged_segments.extend(batch_results)
 
                     # Delete checkpoint file to free disk space
@@ -7776,7 +7833,7 @@ def find_all_existing_analyses() -> Optional[str]:
                     # Load chunk progress (for chunked mode)
                     if is_chunked:
                         with open(progress_file, "rb") as f:
-                            progress_data = pickle.load(f)
+                            progress_data = safe_pickle_load(f)
 
                         completed = len(progress_data.get("processed_chunks", []))
                         total = progress_data.get("total_chunks", 0)
@@ -7798,7 +7855,7 @@ def find_all_existing_analyses() -> Optional[str]:
                     if elevation_progress_file.exists():
                         try:
                             with open(elevation_progress_file, "rb") as f:
-                                elevation_data = pickle.load(f)
+                                elevation_data = safe_pickle_load(f)
                             # Check both in-memory and disk-based elevation storage
                             elevation_coords = len(elevation_data.get("coordinate_mapping", {}))
                             # If using disk-based storage, check elevations_fetched count
@@ -7814,7 +7871,7 @@ def find_all_existing_analyses() -> Optional[str]:
                     if deduplication_progress_file.exists():
                         try:
                             with open(deduplication_progress_file, "rb") as f:
-                                dedupe_data = pickle.load(f)
+                                dedupe_data = safe_pickle_load(f)
 
                             step1_complete = dedupe_data.get("step1_complete", False)
                             step1_in_progress = dedupe_data.get(
@@ -8255,7 +8312,7 @@ def find_existing_analysis(
                     # Load chunk progress (for chunked mode)
                     if is_chunked_mode:
                         with open(progress_file, "rb") as f:
-                            progress_data = pickle.load(f)
+                            progress_data = safe_pickle_load(f)
 
                         completed = len(progress_data.get("processed_chunks", []))
                         total = progress_data.get("total_chunks", 0)
@@ -8277,7 +8334,7 @@ def find_existing_analysis(
                     if elevation_progress_file.exists():
                         try:
                             with open(elevation_progress_file, "rb") as f:
-                                elevation_data = pickle.load(f)
+                                elevation_data = safe_pickle_load(f)
                             # Check both in-memory and disk-based elevation storage
                             elevation_coords = len(elevation_data.get("coordinate_mapping", {}))
                             # If using disk-based storage, check elevations_fetched count
@@ -8311,7 +8368,7 @@ def find_existing_analysis(
                     if deduplication_progress_file.exists():
                         try:
                             with open(deduplication_progress_file, "rb") as f:
-                                dedupe_data = pickle.load(f)
+                                dedupe_data = safe_pickle_load(f)
 
                             step1_complete = dedupe_data.get("step1_complete", False)
                             step1_in_progress = dedupe_data.get(
@@ -8856,11 +8913,12 @@ def _get_or_init_way_boundaries(segment: Dict) -> List[Tuple[int, int, int]]:
     if bounds is not None:
         return list(bounds)  # Return copy to avoid mutation
 
-    # Initialize from way_ids - single way covers full range
+    # Initialize from way_ids - ALL ways cover full range (when bounds unknown)
+    # Fix: was only returning first way_id, now returns all (matches merger.py Fix #12)
     way_ids = segment.get("way_ids", [])
     nodes = segment.get("nodes", [])
     if way_ids:
-        return [(0, len(nodes), way_ids[0])]
+        return [(0, len(nodes), wid) for wid in way_ids]
     return []
 
 
@@ -10588,6 +10646,10 @@ def process_region_without_chunking(
                 min(start_batch_idx * BATCH_SIZE, total_segments) if start_batch_idx > 0 else 0
             ),  # Start from checkpoint position (capped at total to show 100% when complete)
         ) as pbar:
+            # Force immediate render when resuming from checkpoint
+            if start_batch_idx > 0:
+                pbar.refresh()
+
             # Initialize postfix to show elevation error rate from the start
             total_elevation_attempts = total_elevations_fetched + total_elevations_failed
             error_rate = (
@@ -10668,10 +10730,16 @@ def process_region_without_chunking(
             checkpoint_file_handle = None
             if use_streaming:
                 checkpoint_file_handle = open(merged_segments_checkpoint)
-                # If resuming, skip to the start batch
+                # If resuming, skip to the start batch with progress indicator
                 if start_batch_idx > 0:
                     lines_to_skip = start_batch_idx * BATCH_SIZE
-                    for _ in range(lines_to_skip):
+                    for _ in tqdm(
+                        range(lines_to_skip),
+                        desc="Seeking to checkpoint",
+                        unit="lines",
+                        leave=False,
+                        **TQDM_DEFAULTS,
+                    ):
                         line = checkpoint_file_handle.readline()
                         if not line:
                             break
@@ -11508,7 +11576,7 @@ def analyze_area(
             print("OPTIONS:")
             print("─" * 70)
             print(f"\n1. Reduce search radius to {CLOUD_MODE_MAX_RADIUS_MILES:.0f} miles or less")
-            print(f"   Re-run with: --radius {CLOUD_MODE_MAX_RADIUS_MILES:.0f}")
+            print(f"   Re-run with: --distance {CLOUD_MODE_MAX_RADIUS_MILES:.0f}")
             print("\n2. Switch to local mode (RECOMMENDED for large areas)")
             print("   Run: ./climb-analyzer setup")
             print("\n   Local mode benefits:")
@@ -12512,7 +12580,7 @@ class ClimbAnalyzer:
         if cache_file.exists():
             try:
                 with open(cache_file, "rb") as f:
-                    cached_results = pickle.load(f)
+                    cached_results = safe_pickle_load(f)
                 if len(cached_results) == len(climbs):
                     print(f"✓ Loaded {len(cached_results):,} geocoded locations from cache")
                     return cached_results
@@ -12707,7 +12775,7 @@ class ClimbAnalyzer:
         if climb_checkpoint_file.exists():
             try:
                 with open(climb_checkpoint_file, "rb") as f:
-                    checkpoint_data = pickle.load(f)
+                    checkpoint_data = safe_pickle_load(f)
                     resume_from_index = checkpoint_data.get("segments_processed", 0)
                     climbs_count = checkpoint_data.get("climbs_found", 0)
                     temp_climbs_file_str = checkpoint_data.get("temp_climbs_file")
@@ -12764,7 +12832,7 @@ class ClimbAnalyzer:
                             if checkpoint_metadata_file.exists():
                                 try:
                                     with open(checkpoint_metadata_file, "rb") as f:
-                                        checkpoint_meta = pickle.load(f)
+                                        checkpoint_meta = safe_pickle_load(f)
 
                                     region = (
                                         checkpoint_meta.get("region_name")
@@ -12860,6 +12928,10 @@ class ClimbAnalyzer:
                     ascii=" ▏▎▍▌▋▊▉█",
                     bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]",
                 ) as pbar:
+                    # Force immediate render when resuming from checkpoint
+                    if resume_from_index > 0:
+                        pbar.refresh()
+
                     batch_climbs = []
                     segments_processed = 0
                     last_checkpoint_index = resume_from_index
@@ -12898,6 +12970,15 @@ class ClimbAnalyzer:
                                                         coord_key, 0.0
                                                     )
                                                     elevations.append(elevation)
+                                                elif hasattr(node, "lat") and hasattr(node, "lon"):
+                                                    # Handle object nodes with .lat/.lon attributes
+                                                    lat = round(node.lat, 6)
+                                                    lon = round(node.lon, 6)
+                                                    coord_key = f"coord_{lat}_{lon}"
+                                                    elevation = self.node_elevations.get(
+                                                        coord_key, 0.0
+                                                    )
+                                                    elevations.append(elevation)
                                                 else:
                                                     elevations.append(0.0)
 
@@ -12911,15 +12992,17 @@ class ClimbAnalyzer:
 
                                                 # Also update start coordinate to be at the lowest point
                                                 if climb_metrics.nodes:
-                                                    climb_metrics.start_lat = climb_metrics.nodes[
-                                                        0
-                                                    ]["lat"]
-                                                    climb_metrics.start_lon = climb_metrics.nodes[
-                                                        0
-                                                    ]["lon"]
+                                                    first_node = climb_metrics.nodes[0]
+                                                    if isinstance(first_node, dict):
+                                                        climb_metrics.start_lat = first_node["lat"]
+                                                        climb_metrics.start_lon = first_node["lon"]
+                                                    elif hasattr(first_node, "lat"):
+                                                        climb_metrics.start_lat = first_node.lat
+                                                        climb_metrics.start_lon = first_node.lon
 
                                             from climb_analyzer.data.elevation_profile import (
                                                 generate_elevation_profile,
+                                                downsample_profile,
                                             )
 
                                             # Convert elevations to feet if using imperial units
@@ -12935,6 +13018,15 @@ class ClimbAnalyzer:
                                                     climb_metrics.nodes, profile_elevations
                                                 )
                                             )
+
+                                            # Downsample long profiles to fit Excel cell limit (32k chars)
+                                            if len(climb_metrics.elevation_profile) > 30000:
+                                                climb_metrics.elevation_profile = (
+                                                    downsample_profile(
+                                                        climb_metrics.elevation_profile,
+                                                        max_chars=30000,
+                                                    )
+                                                )
 
                                         except Exception as e:
                                             climb_metrics.elevation_profile = ""
@@ -13154,7 +13246,7 @@ class ClimbAnalyzer:
                 if checkpoint_metadata_file.exists():
                     try:
                         with open(checkpoint_metadata_file, "rb") as f:
-                            checkpoint_meta = pickle.load(f)
+                            checkpoint_meta = safe_pickle_load(f)
 
                         region = (
                             checkpoint_meta.get("region_name")
@@ -13235,7 +13327,7 @@ class ClimbAnalyzer:
             try:
                 while True:
                     # Load batches of climbs (as written by analysis phase)
-                    batch_climbs = pickle.load(f)
+                    batch_climbs = safe_pickle_load(f)
 
                     for climb in batch_climbs:
                         # Filter by score threshold
@@ -13310,7 +13402,7 @@ class ClimbAnalyzer:
             with open(filepath, "rb") as f:
                 while True:
                     try:
-                        yield pickle.load(f)
+                        yield safe_pickle_load(f)
                     except EOFError:
                         break
 
@@ -13393,7 +13485,7 @@ class ClimbAnalyzer:
             try:
                 while True:
                     # Load batch of climbs
-                    batch_climbs = pickle.load(f)
+                    batch_climbs = safe_pickle_load(f)
 
                     # Extract unique coordinates from batch
                     unique_coords = set()
@@ -13450,7 +13542,7 @@ class ClimbAnalyzer:
         with open(geocode_temp_file.name, "rb") as gcf:
             try:
                 while True:
-                    batch_geocode = pickle.load(gcf)
+                    batch_geocode = safe_pickle_load(gcf)
                     geocode_lookup.update(batch_geocode)
             except EOFError:
                 pass
@@ -13623,7 +13715,7 @@ class ClimbAnalyzer:
             ) as pbar:
                 try:
                     while True:
-                        batch_climbs = pickle.load(f)
+                        batch_climbs = safe_pickle_load(f)
 
                         for climb in batch_climbs:
                             # Check if we need to start a new file
@@ -14044,7 +14136,7 @@ class ClimbAnalyzer:
             try:
                 while True:
                     # Load batches of climbs (as written by analysis phase)
-                    batch_climbs = pickle.load(f)
+                    batch_climbs = safe_pickle_load(f)
 
                     for climb in batch_climbs:
                         if not climb.nodes or len(climb.nodes) < 2:
@@ -14120,7 +14212,7 @@ class ClimbAnalyzer:
             if connections_checkpoint_file.exists():
                 try:
                     with open(connections_checkpoint_file, "rb") as f:
-                        checkpoint_data = pickle.load(f)
+                        checkpoint_data = safe_pickle_load(f)
                         resume_from_index = checkpoint_data.get("endpoints_processed", 0)
                         # Restore connections dict (convert lists back to sets)
                         saved_connections = checkpoint_data.get("connections", {})
@@ -14154,6 +14246,10 @@ class ClimbAnalyzer:
             unit="climbs",
             **TQDM_DEFAULTS,
         ) as pbar:
+            # Force immediate render when resuming from checkpoint
+            if resume_from_index > 0:
+                pbar.refresh()
+
             for idx, endpoint in enumerate(all_endpoints):
                 # Skip already processed endpoints if resuming
                 if idx < resume_from_index:
@@ -14269,7 +14365,7 @@ class ClimbAnalyzer:
         with open(temp_climbs_file, "rb") as f_in, open(temp_output, "wb") as f_out:
             try:
                 while True:
-                    batch_climbs = pickle.load(f_in)
+                    batch_climbs = safe_pickle_load(f_in)
 
                     # Update this batch with connection information
                     for climb in batch_climbs:
@@ -15113,15 +15209,6 @@ class ClimbAnalyzer:
         tracktype = road_segment.get("tracktype", "-")
         from_split = road_segment.get("_from_split", False)
 
-        # DEBUG: Track way 27437770 specifically
-        if 27437770 in way_ids:
-            print(f"\n[WAY 27437770 ENTRY] calculate_climb_metrics called:")
-            print(f"  way_ids count: {len(way_ids)}")
-            print(f"  way_ids: {way_ids[:5]}{'...' if len(way_ids) > 5 else ''}")
-            print(f"  nodes count: {len(nodes)}")
-            print(f"  from_split: {from_split}")
-            print(f"  street_name: {street_name}")
-
         if len(nodes) < 2:
             return []
 
@@ -15163,67 +15250,17 @@ class ClimbAnalyzer:
         if len(elevations) < 2:
             return []
 
-        # Debug specifically for way 27437770 (Appalachian Trail investigation)
-        debug_27437770 = 27437770 in way_ids
-
         # Check if we should split at the highest point
         # Only split if: (1) not already from a split, and (2) highest point is in the middle
         if not from_split:
             peak_idx = self._find_highest_point_index(elevations)
 
-            # Calculate distance to peak for debug
-            if debug_27437770:
-                from math import radians, sin, cos, sqrt, atan2
-                def _haversine(lat1, lon1, lat2, lon2):
-                    R = 3959  # miles
-                    dlat = radians(lat2 - lat1)
-                    dlon = radians(lon2 - lon1)
-                    a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
-                    return 2 * R * atan2(sqrt(a), sqrt(1-a))
-
-                dist_to_peak = sum(_haversine(
-                    valid_nodes[i-1]['lat'], valid_nodes[i-1]['lon'],
-                    valid_nodes[i]['lat'], valid_nodes[i]['lon']
-                ) for i in range(1, min(peak_idx + 1, len(valid_nodes))))
-
-                total_dist = sum(_haversine(
-                    valid_nodes[i-1]['lat'], valid_nodes[i-1]['lon'],
-                    valid_nodes[i]['lat'], valid_nodes[i]['lon']
-                ) for i in range(1, len(valid_nodes)))
-
-                way_boundaries = road_segment.get("way_boundaries")
-
-                print(f"\n[WAY 27437770 PEAK-FIND]")
-                print(f"  Street: {street_name}")
-                print(f"  Total nodes: {len(valid_nodes)}, Total distance: {total_dist:.2f} miles")
-                print(f"  Peak elevation: {elevations[peak_idx]:.0f} ft at node index {peak_idx} (mile {dist_to_peak:.2f})")
-                print(f"  Start elev: {elevations[0]:.0f} ft, End elev: {elevations[-1]:.0f} ft")
-                print(f"  way_ids count: {len(way_ids)}")
-                print(f"  way_boundaries: {len(way_boundaries) if way_boundaries else 'None'} entries")
-                if way_boundaries and len(way_boundaries) <= 10:
-                    for wb in way_boundaries:
-                        print(f"    {wb}")
-                elif way_boundaries:
-                    print(f"    First 5: {way_boundaries[:5]}")
-                    print(f"    Last 5: {way_boundaries[-5:]}")
-
             # Check if peak is in the middle (not at start or end)
             if peak_idx > 0 and peak_idx < len(elevations) - 1:
-                if debug_27437770:
-                    print(f"\n[WAY 27437770 SPLIT-DECISION]")
-                    print(f"  Will split: YES")
-                    print(f"  Reason: Peak at index {peak_idx} is in middle (0 < {peak_idx} < {len(elevations)-1})")
-
                 # Split the segment at the peak
                 segment_a, segment_b = self._split_segment_at_peak(
                     road_segment, peak_idx, valid_nodes, elevations
                 )
-
-                if debug_27437770:
-                    print(f"\n[WAY 27437770 SPLIT-RESULT]")
-                    print(f"  Split A: {len(segment_a.get('nodes', []))} nodes, way_ids={segment_a.get('way_ids', [])}")
-                    print(f"  Split B: {len(segment_b.get('nodes', [])) if segment_b else 0} nodes, way_ids={segment_b.get('way_ids', []) if segment_b else []}")
-                    print(f"  Original segment NOT returned (correct behavior)")
 
                 results = []
                 # Recursively process both segments
@@ -15236,16 +15273,7 @@ class ClimbAnalyzer:
                     if climb_b:
                         results.extend(climb_b)
 
-                if debug_27437770:
-                    print(f"  -> Split produced {len(results)} climbs total")
                 return results
-            elif debug_27437770:
-                print(f"\n[WAY 27437770 SPLIT-DECISION]")
-                print(f"  Will split: NO")
-                if peak_idx == 0:
-                    print(f"  Reason: Peak is at START of segment (index 0)")
-                elif peak_idx == len(elevations) - 1:
-                    print(f"  Reason: Peak is at END of segment (index {peak_idx})")
 
         # CRITICAL: Ensure elevations go from LOW to HIGH (ascending)
         # If first elevation > last elevation, reverse arrays
@@ -15344,22 +15372,6 @@ class ClimbAnalyzer:
         osm_links = []
         for way_id in way_ids:
             osm_links.append(f"[{way_id}](https://www.openstreetmap.org/way/{way_id})")
-
-        # Debug for way 27437770 - verify peak location in final output
-        if 27437770 in way_ids:
-            # Find where max elevation occurs in the final (possibly reversed) elevations
-            max_elev_idx = elevations.index(max(elevations))
-            peak_position = "END" if max_elev_idx == len(elevations) - 1 else ("START" if max_elev_idx == 0 else "MIDDLE")
-            print(f"\n[WAY 27437770 OUTPUT]")
-            print(f"  Creating ClimbMetrics with way_ids={way_ids}")
-            print(f"  from_split: {from_split}")
-            print(f"  Length: {total_distance:.2f} km ({total_distance * 0.621371:.2f} mi)")
-            print(f"  Elevations: {len(elevations)} points, range {min(elevations):.0f}-{max(elevations):.0f} ft")
-            print(f"  Peak at index {max_elev_idx}/{len(elevations)-1}: {peak_position}")
-            if peak_position == "MIDDLE":
-                print(f"  *** BUG: Peak should be at END, not MIDDLE! ***")
-            else:
-                print(f"  (correct - peak at {peak_position})")
 
         return [
             ClimbMetrics(
@@ -16935,10 +16947,10 @@ CLIMB ANALYZER - EXTENDED HELP
 
 1. ADDRESS ANALYSIS
    Analyze climbs within 25 miles of Boulder, CO:
-   $ python climb_analyzer.py -a "Boulder, CO" --radius 25
+   $ python climb_analyzer.py -a "Boulder, CO" --distance 25
 
    With custom settings:
-   $ python climb_analyzer.py -a "Boulder, CO" --radius 25 -u metric -t fiets -s paved -m 250
+   $ python climb_analyzer.py -a "Boulder, CO" --distance 25 -u metric -t fiets -s paved -m 250
 
 2. SINGLE REGION ANALYSIS
    Analyze entire state of Colorado:
@@ -17177,15 +17189,40 @@ def delete_checkpoints(skip_confirm=False):
 
     # Delete checkpoint directory
     checkpoint_dir = CHECKPOINT_DIR
-    if checkpoint_dir.exists():
-        shutil.rmtree(checkpoint_dir)
-        print("✓ Deleted all checkpoints")
-    else:
-        print("   No checkpoint directory found")
+    try:
+        if checkpoint_dir.exists():
+            try:
+                shutil.rmtree(checkpoint_dir)
+                print("✓ Deleted all checkpoints")
+            except OSError as e:
+                # Handle "Device or resource busy" - delete contents instead
+                deleted = 0
+                failed = 0
+                items = list(checkpoint_dir.iterdir())
+                for item in items:
+                    try:
+                        if item.is_dir():
+                            shutil.rmtree(item)
+                        else:
+                            item.unlink()
+                        deleted += 1
+                    except OSError:
+                        failed += 1
+                if deleted > 0:
+                    print(f"✓ Deleted {deleted} checkpoint items")
+                if failed > 0:
+                    print(f"⚠️  {failed} items could not be deleted (in use)")
+                if deleted == 0 and failed == 0:
+                    print("✓ Checkpoint directory is empty (nothing to delete)")
+        else:
+            print("   No checkpoint directory found")
+    except Exception as e:
+        print(f"⚠️  Error accessing checkpoint directory: {e}")
 
 
 def delete_planet_data(skip_confirm=False):
     """Delete all OSM planet data."""
+    import shutil
 
     if not skip_confirm:
         confirm = input("\n⚠️  Delete all OSM .pbf files and indices? [y/N]: ")
@@ -17199,23 +17236,65 @@ def delete_planet_data(skip_confirm=False):
         return
 
     deleted_count = 0
-    for pbf_file in planet_dir.glob("*.pbf"):
-        pbf_file.unlink()
-        deleted_count += 1
+    failed_count = 0
+    for pbf_file in list(planet_dir.glob("*.pbf")):
+        try:
+            pbf_file.unlink()
+            deleted_count += 1
 
-        # Delete associated index files
-        idx_file = pbf_file.with_suffix(".pbf.idx")
-        if idx_file.exists():
-            idx_file.unlink()
+            # Delete associated index files
+            idx_file = pbf_file.with_suffix(".pbf.idx")
+            if idx_file.exists():
+                idx_file.unlink()
 
-        # Delete rtree indices
-        idx_dir = pbf_file.with_suffix("")
-        if idx_dir.is_dir():
-            import shutil
+            # Delete rtree indices
+            idx_dir = pbf_file.with_suffix("")
+            if idx_dir.is_dir():
+                shutil.rmtree(idx_dir)
+        except OSError:
+            failed_count += 1
 
-            shutil.rmtree(idx_dir)
+    if deleted_count > 0:
+        print(f"✓ Deleted {deleted_count} OSM files and indices")
+    if failed_count > 0:
+        print(f"⚠️  {failed_count} files could not be deleted (in use)")
+    if deleted_count == 0 and failed_count == 0:
+        print("✓ OSM planet data directory is empty (nothing to delete)")
 
-    print(f"✓ Deleted {deleted_count} OSM files and indices")
+
+def _cleanup_elevation_configs():
+    """Clean opentopodata-config.yaml and config.yaml after elevation deletion."""
+    from pathlib import Path
+
+    # 1. Reset opentopodata-config.yaml to minimal test config
+    opentopodata_config = Path("opentopodata-config.yaml")
+    if opentopodata_config.exists():
+        opentopodata_config.write_text("""datasets:
+- name: test-dataset
+  path: /app/tests/data/datasets/test-etopo1-resampled-1deg/
+  filename_epsg: 4326
+  filename_tile_size: 1
+max_locations_per_request: 500
+access_control_allow_origin: '*'
+""")
+        print("   ✓ Reset opentopodata-config.yaml to minimal config")
+
+    # 2. Clear elevation entries from project config.yaml
+    config_path = Path("config.yaml")
+    if config_path.exists():
+        try:
+            import yaml
+
+            with open(config_path) as f:
+                config = yaml.safe_load(f) or {}
+            if "ELEVATION_DATASETS" in config or "ELEVATION_DATA" in config:
+                config["ELEVATION_DATASETS"] = {}
+                config["ELEVATION_DATA"] = []
+                with open(config_path, "w") as f:
+                    yaml.dump(config, f, default_flow_style=False)
+                print("   ✓ Cleared ELEVATION_DATASETS and ELEVATION_DATA from config.yaml")
+        except Exception as e:
+            print(f"   ⚠️  Could not update config.yaml: {e}")
 
 
 def delete_elevation_data(skip_confirm=False):
@@ -17238,28 +17317,449 @@ def delete_elevation_data(skip_confirm=False):
         elevation_dir = Path("data/elevation_data")
 
     if elevation_dir.exists():
-        shutil.rmtree(elevation_dir)
-        elevation_dir.mkdir(parents=True)
-        print("✓ Deleted all elevation data")
+        try:
+            shutil.rmtree(elevation_dir)
+            elevation_dir.mkdir(parents=True)
+            print("✓ Deleted all elevation data")
+        except OSError:
+            # Handle "Device or resource busy" - delete contents instead
+            deleted = 0
+            failed = 0
+            items = list(elevation_dir.iterdir())
+            for item in items:
+                try:
+                    if item.is_dir():
+                        shutil.rmtree(item)
+                    else:
+                        item.unlink()
+                    deleted += 1
+                except OSError:
+                    failed += 1
+            if deleted > 0:
+                print(f"✓ Deleted {deleted} elevation data items")
+            if failed > 0:
+                print(f"⚠️  {failed} items could not be deleted (in use)")
+            if deleted == 0 and failed == 0:
+                print("✓ Elevation data directory is empty (nothing to delete)")
     else:
         print("   No elevation data directory found")
 
+    # Clean up config files after elevation data deletion
+    _cleanup_elevation_configs()
 
-def delete_all_data():
+
+def delete_all_data(skip_confirm=False):
     """Delete all data: checkpoints + OSM + elevation."""
-    print("\n⚠️  WARNING: This will delete ALL data:")
-    print("  • Checkpoint files")
-    print("  • OSM .pbf files and indices")
-    print("  • Elevation dataset files")
-    confirm = input("\nContinue? [y/N]: ")
-    if confirm.lower() != "y":
-        print("Cancelled")
-        return
+    if not skip_confirm:
+        print("\n⚠️  WARNING: This will delete ALL data:")
+        print("  • Checkpoint files")
+        print("  • OSM .pbf files and indices")
+        print("  • Elevation dataset files")
+        confirm = input("\nContinue? [y/N]: ")
+        if confirm.lower() != "y":
+            print("Cancelled")
+            return
 
     delete_checkpoints(skip_confirm=True)
     delete_planet_data(skip_confirm=True)
     delete_elevation_data(skip_confirm=True)
     print("\n✓ All data deleted successfully")
+
+
+def delete_unavailable_cache(dataset=None, skip_confirm=False):
+    """Delete .unavailable files that cache tiles marked as unavailable.
+
+    This is useful when tiles were incorrectly marked as unavailable due to
+    authentication issues or server problems.
+
+    Args:
+        dataset: If specified, only delete for this dataset (e.g., 'srtm30m', 'ned10m')
+        skip_confirm: If True, skip confirmation prompt
+    """
+    from pathlib import Path
+
+    elevation_data_dir = Path("data/elevation_data")
+    if not elevation_data_dir.exists():
+        print("No elevation data directory found")
+        return
+
+    # Map dataset names to directories
+    dataset_dirs = {
+        'srtm30m': 'srtm30m',
+        'ned10m': 'ned10m',
+        'aster30m': 'aster',  # Directory is 'aster', dataset is 'aster30m'
+        'aw3d30': 'aw3d30',
+        'arctic32m': 'arcticdem',
+        'rema32m': 'rema',
+    }
+
+    # Find .unavailable files
+    unavailable_files = []
+    if dataset:
+        # Specific dataset
+        dir_name = dataset_dirs.get(dataset.lower(), dataset.lower())
+        unavailable_file = elevation_data_dir / dir_name / ".unavailable"
+        if unavailable_file.exists():
+            unavailable_files.append(unavailable_file)
+        else:
+            print(f"No .unavailable file found for dataset: {dataset}")
+            return
+    else:
+        # All datasets
+        for subdir in elevation_data_dir.iterdir():
+            if subdir.is_dir():
+                unavailable_file = subdir / ".unavailable"
+                if unavailable_file.exists():
+                    unavailable_files.append(unavailable_file)
+
+    if not unavailable_files:
+        print("No .unavailable files found")
+        return
+
+    # Show what will be deleted
+    print("\n  Unavailable cache files found:")
+    total_tiles = 0
+    for f in unavailable_files:
+        try:
+            with open(f) as fp:
+                tiles = [line.strip() for line in fp if line.strip()]
+                total_tiles += len(tiles)
+                print(f"  • {f.parent.name}: {len(tiles)} tiles")
+        except Exception:
+            print(f"  • {f.parent.name}: (could not read)")
+
+    if not skip_confirm:
+        print(f"\n⚠️  This will allow {total_tiles} tiles to be re-attempted on next download")
+        confirm = input("Continue? [y/N]: ")
+        if confirm.lower() != "y":
+            print("Cancelled")
+            return
+
+    # Delete the files
+    deleted = 0
+    for f in unavailable_files:
+        try:
+            f.unlink()
+            deleted += 1
+            print(f"  ✓ Deleted {f.parent.name}/.unavailable")
+        except Exception as e:
+            print(f"  ⚠️  Could not delete {f}: {e}")
+
+    print(f"\n✓ Cleared unavailable cache for {deleted} dataset(s)")
+    print("  Tiles will be re-attempted on next elevation download")
+
+
+def delete_osm_indexes(skip_confirm=False, region_name=None):
+    """Delete OSM spatial index files.
+
+    Args:
+        skip_confirm: If True, skip confirmation prompt
+        region_name: If specified, only delete indexes for this region (normalized name)
+    """
+    if not skip_confirm and region_name is None:
+        confirm = input("\n⚠️  Delete all OSM spatial index files? [y/N]: ")
+        if confirm.lower() != "y":
+            print("Cancelled")
+            return
+
+    if not OSM_INDEXES_DIR.exists():
+        print("   No OSM indexes directory found")
+        return
+
+    deleted_count = 0
+    failed_count = 0
+
+    if region_name:
+        # Delete only indexes for specific region
+        normalized = region_name.lower().replace(" ", "-").replace("_", "-")
+        patterns = [f"{normalized}-latest.osm_*", f"{normalized}.osm_*", f"{normalized}_*"]
+        for pattern in patterns:
+            for idx_file in OSM_INDEXES_DIR.glob(pattern):
+                try:
+                    if idx_file.is_dir():
+                        shutil.rmtree(idx_file)
+                    else:
+                        idx_file.unlink()
+                    deleted_count += 1
+                except OSError:
+                    failed_count += 1
+    else:
+        # Delete all index files
+        for idx_file in list(OSM_INDEXES_DIR.iterdir()):
+            try:
+                if idx_file.is_dir():
+                    shutil.rmtree(idx_file)
+                else:
+                    idx_file.unlink()
+                deleted_count += 1
+            except OSError:
+                failed_count += 1
+
+    if deleted_count > 0:
+        scope = f"for {region_name}" if region_name else ""
+        print(f"✓ Deleted {deleted_count} OSM index files {scope}".strip())
+    if failed_count > 0:
+        print(f"⚠️  {failed_count} index files could not be deleted (in use)")
+    if deleted_count == 0 and failed_count == 0:
+        print("   No OSM index files found to delete")
+
+
+def parse_tile_coordinates(filename: str) -> Optional[Tuple[int, int]]:
+    """Parse latitude and longitude from elevation tile filename.
+
+    Handles multiple naming conventions:
+    - SRTM/NED: N44W117.tif, n44w117.tif
+    - ASTER: ASTGTMV003_N44W117_dem.tif
+    - AW3D30: N044W117.tif
+
+    Returns:
+        (lat, lon) tuple or None if parsing fails
+    """
+    import re
+
+    # Try different patterns
+    # Pattern 1: Standard SRTM/NED (N44W117 or n44w117)
+    match = re.search(r'([NSns])(\d{1,3})([EWew])(\d{1,3})', filename)
+    if match:
+        lat_dir, lat_val, lon_dir, lon_val = match.groups()
+        lat = int(lat_val)
+        lon = int(lon_val)
+
+        if lat_dir.upper() == 'S':
+            lat = -lat
+        if lon_dir.upper() == 'W':
+            lon = -lon
+
+        return (lat, lon)
+
+    return None
+
+
+def delete_elevation_tiles_in_bbox(bbox: Tuple[float, float, float, float], verbose=True):
+    """Delete elevation tiles that fall within the bounding box.
+
+    Args:
+        bbox: (lat_min, lon_min, lat_max, lon_max) bounding box
+        verbose: Print progress messages
+    """
+    import math
+
+    try:
+        from utils.data_paths import ELEVATION_DATA_DIR
+    except ImportError:
+        ELEVATION_DATA_DIR = Path("data/elevation_data")
+
+    if not ELEVATION_DATA_DIR.exists():
+        if verbose:
+            print("   No elevation data directory found")
+        return
+
+    lat_min, lon_min, lat_max, lon_max = bbox
+
+    # Calculate which tile coordinates fall within bbox
+    # Tiles are named by their lower-left corner (floor)
+    tile_lat_min = int(math.floor(lat_min))
+    tile_lat_max = int(math.floor(lat_max))
+    tile_lon_min = int(math.floor(lon_min))
+    tile_lon_max = int(math.floor(lon_max))
+
+    deleted_count = 0
+    datasets_affected = set()
+
+    for dataset_dir in ELEVATION_DATA_DIR.iterdir():
+        if not dataset_dir.is_dir():
+            continue
+
+        # Skip VRT directories (arctic32m-vrt, rema32m-vrt)
+        if dataset_dir.name.endswith('-vrt'):
+            continue
+
+        # Check all tile files in dataset
+        for tile_file in list(dataset_dir.glob("*")):
+            if tile_file.is_dir():
+                continue
+
+            # Skip non-elevation files
+            if not tile_file.suffix.lower() in ['.tif', '.hgt']:
+                continue
+
+            coords = parse_tile_coordinates(tile_file.name)
+            if coords:
+                tile_lat, tile_lon = coords
+                # Check if tile falls within bbox
+                if (tile_lat_min <= tile_lat <= tile_lat_max and
+                    tile_lon_min <= tile_lon <= tile_lon_max):
+                    try:
+                        tile_file.unlink()
+                        deleted_count += 1
+                        datasets_affected.add(dataset_dir.name)
+                    except OSError as e:
+                        if verbose:
+                            print(f"   ⚠️  Could not delete {tile_file.name}: {e}")
+
+    if verbose:
+        if deleted_count > 0:
+            print(f"✓ Deleted {deleted_count} elevation tiles from: {', '.join(sorted(datasets_affected))}")
+        else:
+            print("   No elevation tiles found in region bbox")
+
+    return deleted_count > 0
+
+
+def update_config_after_region_deletion(region_name: str, osm_deleted: bool, elevation_deleted: bool):
+    """Update config.yaml after deleting region data.
+
+    Args:
+        region_name: Name of the region whose data was deleted
+        osm_deleted: Whether OSM data was deleted
+        elevation_deleted: Whether elevation data was deleted
+    """
+    try:
+        import yaml
+        config_path = Path("config.yaml")
+
+        if not config_path.exists():
+            return
+
+        with open(config_path) as f:
+            config = yaml.safe_load(f) or {}
+
+        modified = False
+
+        if osm_deleted:
+            # Remove from OSM_COVERAGE
+            osm_coverage = config.get('OSM_COVERAGE', [])
+            if region_name in osm_coverage:
+                osm_coverage.remove(region_name)
+                config['OSM_COVERAGE'] = osm_coverage
+                modified = True
+
+            # Remove from OSM_PLANET_DATA
+            normalized = region_name.lower().replace(" ", "-").replace("_", "-")
+            pbf_name = f"{normalized}-latest.osm.pbf"
+            osm_planet_data = config.get('OSM_PLANET_DATA', [])
+            if pbf_name in osm_planet_data:
+                osm_planet_data.remove(pbf_name)
+                config['OSM_PLANET_DATA'] = osm_planet_data
+                modified = True
+
+        if elevation_deleted:
+            # Remove from ELEVATION_COVERAGE (if it exists)
+            elev_coverage = config.get('ELEVATION_COVERAGE', [])
+            if region_name in elev_coverage:
+                elev_coverage.remove(region_name)
+                config['ELEVATION_COVERAGE'] = elev_coverage
+                modified = True
+
+        if modified:
+            with open(config_path, 'w') as f:
+                yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+            print(f"   ✓ Updated config.yaml")
+
+    except Exception as e:
+        print(f"   ⚠️  Could not update config.yaml: {e}")
+
+
+def rebuild_opentopodata_after_deletion():
+    """Update opentopodata config and restart service after elevation deletion."""
+    try:
+        from utils.opentopodata_manager import rebuild_and_restart, update_config
+
+        print("\n🔄 Updating OpenTopoData configuration...")
+
+        # Update config based on remaining elevation data
+        update_config()
+
+        # Restart the service
+        print("🔄 Restarting OpenTopoData service...")
+        rebuild_and_restart()
+
+        print("✓ OpenTopoData service updated")
+    except ImportError:
+        print("   ⚠️  opentopodata_manager not available - manual restart required")
+    except Exception as e:
+        print(f"   ⚠️  Could not restart OpenTopoData: {e}")
+
+
+def delete_region_data(region_name: str, delete_checkpoints=True, delete_osm=True,
+                       delete_elevation=True, rebuild_opentopodata=True):
+    """Delete all data for a specific region only.
+
+    This is used for per-region cleanup after analysis, ensuring only data
+    for the specified region is removed while leaving other regions intact.
+
+    Args:
+        region_name: Name of the region (e.g., "Washington", "Hawaii")
+        delete_checkpoints: Delete checkpoint directories for this region
+        delete_osm: Delete OSM PBF file and indexes for this region
+        delete_elevation: Delete elevation tiles within region's bounding box
+        rebuild_opentopodata: Rebuild opentopodata service after elevation deletion
+    """
+    print(f"\n🧹 Cleaning up data for region: {region_name}")
+
+    normalized = region_name.lower().replace(" ", "-").replace("_", "-")
+    elevation_deleted = False
+
+    if delete_checkpoints:
+        # Delete checkpoint directories matching this region
+        deleted_count = 0
+        for checkpoint_dir in CHECKPOINT_DIR.glob(f"{region_name}_*"):
+            try:
+                shutil.rmtree(checkpoint_dir)
+                deleted_count += 1
+            except OSError as e:
+                print(f"   ⚠️  Could not delete {checkpoint_dir.name}: {e}")
+
+        # Also try with normalized name
+        for checkpoint_dir in CHECKPOINT_DIR.glob(f"{normalized}_*"):
+            if checkpoint_dir.exists():  # May have been deleted above
+                try:
+                    shutil.rmtree(checkpoint_dir)
+                    deleted_count += 1
+                except OSError:
+                    pass
+
+        if deleted_count > 0:
+            print(f"✓ Deleted {deleted_count} checkpoint directory(s)")
+        else:
+            print("   No checkpoint directories found for this region")
+
+    if delete_osm:
+        # Delete OSM PBF file
+        pbf_deleted = False
+        for pbf_pattern in [f"{normalized}-latest.osm.pbf", f"{normalized}.osm.pbf"]:
+            pbf_file = PLANET_OSM_DIR / pbf_pattern
+            if pbf_file.exists():
+                try:
+                    pbf_file.unlink()
+                    print(f"✓ Deleted OSM file: {pbf_pattern}")
+                    pbf_deleted = True
+                except OSError as e:
+                    print(f"   ⚠️  Could not delete {pbf_pattern}: {e}")
+
+        if not pbf_deleted:
+            print("   No OSM PBF file found for this region")
+
+        # Delete OSM spatial indexes
+        delete_osm_indexes(skip_confirm=True, region_name=region_name)
+
+    if delete_elevation:
+        # Get region bounding box and delete tiles within it
+        bbox = get_region_bbox_from_definitions(region_name)
+        if bbox:
+            elevation_deleted = delete_elevation_tiles_in_bbox(bbox, verbose=True)
+        else:
+            print(f"   ⚠️  Could not determine bounding box for {region_name}")
+            print("      Elevation tiles not deleted")
+
+    # Update config.yaml
+    update_config_after_region_deletion(region_name, delete_osm, delete_elevation)
+
+    # Rebuild opentopodata if elevation was deleted
+    if delete_elevation and elevation_deleted and rebuild_opentopodata:
+        rebuild_opentopodata_after_deletion()
+
+    print(f"✓ Region cleanup complete: {region_name}")
 
 
 def download_data_for_regions(regions):
@@ -17328,57 +17828,37 @@ def download_data_for_regions(regions):
             # Get tier setting (defaults to tertiary for maximum coverage)
             tier_setting = config.get("ELEVATION_DATASET_TIERS", "primary+secondary+tertiary")
 
-            # Get credentials from .netrc file (or config.yaml as fallback)
-            try:
-                from climb_analyzer.data.manager import get_credentials_from_netrc
-
-                netrc_creds = get_credentials_from_netrc()
-                if netrc_creds.get("earthdata"):
-                    credentials = netrc_creds
-                    print("  ✓ Using EarthData credentials from .netrc")
-            except Exception:
-                pass
-
-            # Fallback: check config.yaml for credentials
-            if not credentials:
-                earthdata_user = config.get("EARTHDATA_USERNAME")
-                earthdata_pass = config.get("EARTHDATA_PASSWORD")
-                if earthdata_user and earthdata_pass:
-                    credentials = {"earthdata": (earthdata_user, earthdata_pass)}
-
-            # Build dataset list based on tier setting
-            # Primary: SRTM (best accuracy, requires credentials) or AW3D30 (no credentials)
-            # Secondary: AW3D30 (public FTP, global coverage)
-            # Tertiary: ASTER (fallback, requires credentials)
-
-            if "primary" in tier_setting:
-                if credentials:
-                    datasets_to_download.append("srtm30m")  # Primary with credentials
-                else:
-                    datasets_to_download.append("aw3d30")  # Primary fallback without credentials
-
-            if "secondary" in tier_setting:
-                if "aw3d30" not in datasets_to_download:
-                    datasets_to_download.append("aw3d30")  # Secondary
-
-            if "tertiary" in tier_setting:
-                if credentials:
-                    datasets_to_download.append("aster")  # Tertiary with credentials
-
-            # If no datasets selected, default to aw3d30 (doesn't require credentials)
-            if not datasets_to_download:
-                datasets_to_download = ["aw3d30"]
-
-            print(f"  Dataset tiers: {tier_setting}")
-            print(f"  Downloading: {', '.join(datasets_to_download)}")
-
-        except Exception as e:
-            print(f"  ⚠️  Could not read tier config, using default (aw3d30): {e}")
-            datasets_to_download = ["aw3d30"]
+            # NOTE: As of December 2025, no datasets require credentials.
+            # All datasets now use public sources:
+            # - SRTM: OpenTopography S3 (public)
+            # - AW3D30: JAXA FTP (public)
+            # - NED, ArcticDEM, REMA: AWS S3 (public)
             credentials = None
 
+            # Get region-aware dataset list (same priority logic used during elevation fetching)
+            # This ensures download phase matches analysis phase requirements
+            region_name = region["canonical_name"]
+            center_lat = (bounds[0] + bounds[2]) / 2  # Center latitude for latitude-based rules
+            datasets_to_download = get_dataset_priority_for_region(region_name, center_lat, cloud_mode=False)
+
+            # Apply tier filtering if user wants to limit datasets
+            # tier_setting: "primary" = 1 dataset, "primary+secondary" = 2 (max now)
+            if tier_setting != "primary+secondary":
+                max_datasets = 1 if tier_setting == "primary" else 2
+                datasets_to_download = datasets_to_download[:max_datasets]
+
+            # If no datasets (shouldn't happen), default to srtm30m
+            if not datasets_to_download:
+                datasets_to_download = ["srtm30m"]
+
+            print(f"  Region datasets: {', '.join(datasets_to_download)}")
+
+        except Exception as e:
+            print(f"  ⚠️  Could not read tier config, using default (srtm30m): {e}")
+            datasets_to_download = ["srtm30m"]
+
         success, new_files = manager.download_elevation_data(
-            region["canonical_name"], bounds, datasets_to_download, credentials=credentials
+            region["canonical_name"], bounds, datasets_to_download, credentials=None
         )
 
         if success:
@@ -17415,6 +17895,47 @@ def download_data_for_regions(regions):
     print("\n✓ Data download complete")
 
 
+def run_cleanup_subcommand(args):
+    """Handle the cleanup subcommand for global data deletion."""
+    print("\n Cleanup Mode")
+
+    # Validate at least one option specified
+    has_option = any([
+        getattr(args, 'cleanup_checkpoints', False),
+        getattr(args, 'cleanup_elevation', False),
+        getattr(args, 'cleanup_osm', False),
+        getattr(args, 'cleanup_all', False),
+        getattr(args, 'cleanup_unavailable', False),
+    ])
+
+    if not has_option:
+        print("Error: Specify at least one of: --checkpoints, --elevation, --osm, --all, --unavailable-cache")
+        print("\nUsage: ./climb-analyzer cleanup [--checkpoints] [--elevation] [--osm] [--all] [--unavailable-cache] [--force]")
+        sys.exit(1)
+
+    skip_confirm = getattr(args, 'force', False)
+
+    if args.cleanup_all or args.cleanup_checkpoints:
+        delete_checkpoints(skip_confirm=skip_confirm)
+
+    if args.cleanup_all or args.cleanup_osm:
+        delete_planet_data(skip_confirm=skip_confirm)
+        delete_osm_indexes(skip_confirm=True)  # Always skip confirm for indexes if OSM confirmed
+
+    if args.cleanup_all or args.cleanup_elevation:
+        delete_elevation_data(skip_confirm=skip_confirm)
+        # Rebuild opentopodata after elevation deletion
+        rebuild_opentopodata_after_deletion()
+
+    if getattr(args, 'cleanup_unavailable', False):
+        delete_unavailable_cache(
+            dataset=getattr(args, 'dataset', None),
+            skip_confirm=skip_confirm
+        )
+
+    print("\n✓ Cleanup complete")
+
+
 def main():
     """Main function to run the climb analyzer."""
     from pathlib import Path
@@ -17431,6 +17952,57 @@ def main():
         description="Climb Analyzer - Analyze road and trail climbs from OpenStreetMap",
         epilog="Use --help-extended for detailed examples and usage",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    # === SUBCOMMANDS ===
+    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+
+    # Cleanup subcommand
+    cleanup_parser = subparsers.add_parser(
+        'cleanup',
+        help='Delete data without running analysis',
+        description='Delete checkpoints, elevation data, or OSM data globally.'
+    )
+    cleanup_parser.add_argument(
+        '--checkpoints',
+        action='store_true',
+        dest='cleanup_checkpoints',
+        help='Delete all checkpoint files'
+    )
+    cleanup_parser.add_argument(
+        '--elevation',
+        action='store_true',
+        dest='cleanup_elevation',
+        help='Delete all elevation data'
+    )
+    cleanup_parser.add_argument(
+        '--osm',
+        action='store_true',
+        dest='cleanup_osm',
+        help='Delete all OSM data and indexes'
+    )
+    cleanup_parser.add_argument(
+        '--all',
+        action='store_true',
+        dest='cleanup_all',
+        help='Delete all data (checkpoints + elevation + OSM)'
+    )
+    cleanup_parser.add_argument(
+        '--unavailable-cache',
+        action='store_true',
+        dest='cleanup_unavailable',
+        help='Delete .unavailable files (tiles marked as unavailable will be re-attempted)'
+    )
+    cleanup_parser.add_argument(
+        '--dataset',
+        type=str,
+        metavar='NAME',
+        help='Only clear unavailable cache for specific dataset (e.g., srtm30m, ned10m, aster30m)'
+    )
+    cleanup_parser.add_argument(
+        '--force',
+        action='store_true',
+        help='Skip confirmation prompts'
     )
 
     # === ANALYSIS MODES (Mutually Exclusive) ===
@@ -17469,10 +18041,10 @@ def main():
 
     # === ANALYSIS PARAMETERS ===
     parser.add_argument(
-        "--radius",
+        "--distance",
         type=float,
-        metavar="RADIUS",
-        help="Search radius in miles/km (required with --address)",
+        metavar="MILES",
+        help="Search radius/distance in miles (required with --address)",
     )
 
     parser.add_argument(
@@ -17531,11 +18103,19 @@ def main():
         help="Download OSM and elevation data without running analysis",
     )
 
+    # Per-region cleanup flags (used with -r for post-analysis cleanup)
     data_group.add_argument(
-        "-C",
-        "--delete-checkpoints",
+        "-c",
+        "--cleanup-checkpoints",
         action="store_true",
-        help="Delete checkpoint files after analysis (in batch/region mode, defaults to keeping checkpoints)",
+        help="Delete checkpoints for THIS region after successful analysis (use with -r)",
+    )
+
+    data_group.add_argument(
+        "-Z",
+        "--cleanup-all-data",
+        action="store_true",
+        help="Delete checkpoints + OSM + elevation for THIS region after successful analysis (use with -r)",
     )
 
     data_group.add_argument(
@@ -17557,33 +18137,8 @@ def main():
         help="Skip uploading to cloud cache (default: auto-upload clean analyses)",
     )
 
-    data_group.add_argument(
-        "-P",
-        "--delete-planet-data",
-        action="store_true",
-        help="Delete all OSM .pbf files and indices",
-    )
-
-    data_group.add_argument(
-        "-E",
-        "--delete-elevation-data",
-        action="store_true",
-        help="Delete all elevation dataset files",
-    )
-
-    data_group.add_argument(
-        "-A",
-        "--delete-all-data",
-        action="store_true",
-        help="Delete ALL data: checkpoints + OSM + elevation",
-    )
-
-    data_group.add_argument(
-        "-X",
-        "--delete-data-on-complete",
-        action="store_true",
-        help="Delete OSM data, elevation data, and checkpoints after analysis completes",
-    )
+    # NOTE: Old global deletion flags (-C, -P, -E, -X) have been replaced by:
+    #   ./climb-analyzer cleanup --checkpoints/--osm/--elevation/--all
 
     # === INFORMATIONAL ===
     info_group = parser.add_argument_group("Informational")
@@ -17670,6 +18225,11 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Handle cleanup subcommand first (no other processing needed)
+    if args.command == 'cleanup':
+        run_cleanup_subcommand(args)
+        return
 
     # Validate: -m/--min-score requires -t/--score-type to be explicitly specified
     if args.min_score is not None and args.score_type is None:
@@ -17867,21 +18427,9 @@ def main():
         run_update_geo_boundaries()
         return
 
-    if args.delete_checkpoints:
-        delete_checkpoints()
-        return
-
-    if args.delete_planet_data:
-        delete_planet_data()
-        return
-
-    if args.delete_elevation_data:
-        delete_elevation_data()
-        return
-
-    if args.delete_all_data:
-        delete_all_data()
-        return
+    # NOTE: Old global deletion flags (-C, -P, -E, -X) have been removed.
+    # Use: ./climb-analyzer cleanup --checkpoints/--osm/--elevation/--all
+    # Per-region cleanup: -c/--cleanup-checkpoints and -Z/--cleanup-all-data (with -r)
 
     # Handle data download
     if args.data_download:
@@ -18082,7 +18630,8 @@ def main():
         from climb_analyzer.data.data_coverage_checker import calculate_storage_requirements_for_batch
 
         # Initialize cleanup_after (may be updated later by storage prompt)
-        cleanup_after = args.delete_data_on_complete
+        # Use new per-region cleanup flags
+        cleanup_after = getattr(args, 'cleanup_all_data', False)
 
         if len(all_locations) == 1:
             location, scope_type, parent = all_locations[0]
@@ -18289,8 +18838,8 @@ def main():
     if args.batch and not args.skip_storage_prompt:
         cleanup_targets, _ = get_cleanup_targets()
         if cleanup_targets:
-            # Use CLI argument for cleanup decision (no prompt)
-            cleanup_after_analysis = args.delete_data_on_complete
+            # Use new per-region cleanup flags
+            cleanup_after_analysis = getattr(args, 'cleanup_all_data', False)
 
     # init
     configure_checkpoints()
@@ -18596,8 +19145,8 @@ def main():
                             is_us_address = False
 
         # Get search radius from command-line or user input
-        if args.radius:
-            radius = args.radius
+        if args.distance:
+            radius = args.distance
             # Convert to km for internal processing based on unit system
             if unit_system == "metric":
                 radius_km = radius
@@ -19853,30 +20402,24 @@ def main():
                 else:
                     region_name = ""
 
-                # Extract the base region name (handle hierarchical paths like "england > bristol")
-                if isinstance(region_name, str) and " > " in region_name:
-                    region_name = region_name.split(" > ")[-1]
+                # Extract the base region name (handle hierarchical paths)
+                if isinstance(region_name, str):
+                    # Handle display format "england > bristol"
+                    if " > " in region_name:
+                        region_name = region_name.split(" > ")[-1]
+                    # Handle path format "europe/united-kingdom/england/bristol"
+                    elif "/" in region_name:
+                        region_name = region_name.split("/")[-1]
 
-                # Use geo_lookup to find the region and determine its location
-                region_info = find_region(region_name)
-                if region_info and region_info.get("pbf_url"):
-                    pbf_url = region_info["pbf_url"]
-                    # Extract continent from URL: download.geofabrik.de/<continent>/...
-                    # e.g., https://download.geofabrik.de/north-america/us/california-latest.osm.pbf
-                    # or https://download.geofabrik.de/europe/united-kingdom/england/bristol-latest.osm.pbf
-                    url_parts = pbf_url.replace("https://download.geofabrik.de/", "").split("/")
-                    if url_parts:
-                        continent_slug = url_parts[0]  # e.g., "europe", "north-america"
-                        # Convert to display name
-                        country_name = continent_slug.replace("-", " ").title()  # "Europe", "North America"
-                    else:
-                        country_name = None
+                # Determine country_name based on region type
+                # For US states: set country to USA explicitly
+                # For non-US regions: country_name can be None, get_cache_path uses find_region()
+                if is_us_state(region_name):
+                    country_name = "United States of America"
                 else:
-                    # Fallback for US states (legacy behavior)
-                    if is_us_state(region_name):
-                        country_name = "United States"
-                    else:
-                        country_name = None
+                    # Non-US regions (like Bristol) - get_cache_path will extract
+                    # the full hierarchical path from find_region(region).pbf_url
+                    country_name = None
             elif scope_type == "country":
                 country_name = location if isinstance(location, str) else location[0]
                 region_name = None
@@ -19884,7 +20427,7 @@ def main():
                 country_name = None
                 region_name = None
 
-            if country_name:
+            if country_name or region_name:
                 cache_path = cloud_cache.get_cache_path(country_name, region_name, scope_type)
 
                 if cache_path:
@@ -19957,24 +20500,46 @@ def main():
             print_warning(f"Cloud cache upload failed: {e}")
             print_warning("Your local analysis is still saved in output/")
 
-    # Batch mode cleanup (planet files, index, elevation data)
-    if cleanup_after_analysis:
+    # Per-region cleanup (new -c and -Z flags)
+    # -c: Delete only checkpoints for this region
+    # -Z: Delete checkpoints + OSM + elevation for this region
+    cleanup_checkpoints_flag = getattr(args, 'cleanup_checkpoints', False)
+    cleanup_all_data_flag = getattr(args, 'cleanup_all_data', False)
+
+    if cleanup_all_data_flag and region_name:
+        # Full cleanup: checkpoints + OSM + elevation for this region only
+        print(f"\nPerforming per-region cleanup for: {region_name}")
+        delete_region_data(
+            region_name,
+            delete_checkpoints=True,
+            delete_osm=True,
+            delete_elevation=True,
+            rebuild_opentopodata=True
+        )
+        cleanup_choice = "3"  # Already cleaned up, don't do additional cleanup
+    elif cleanup_checkpoints_flag and region_name:
+        # Checkpoint-only cleanup for this region
+        print(f"\nDeleting checkpoints for: {region_name}")
+        delete_region_data(
+            region_name,
+            delete_checkpoints=True,
+            delete_osm=False,
+            delete_elevation=False,
+            rebuild_opentopodata=False
+        )
+        cleanup_choice = "3"  # Already cleaned up
+    elif cleanup_after_analysis:
+        # Legacy batch mode cleanup (for backward compatibility with batch_mode_menu)
         print("\nPerforming batch mode cleanup...")
         perform_cleanup(cleanup_targets, verbose=True)
-
-    # NOW HANDLE CHECKPOINT CLEANUP (MOVED TO AFTER XLS SAVING)
-    # In batch mode (including -r region mode), don't prompt - use flags to determine cleanup
-    if args.batch:
-        # Batch mode - use flags to determine cleanup behavior
-        # Delete checkpoints if either --delete-checkpoints or --delete-data-on-complete is set
-        if args.delete_checkpoints or args.delete_data_on_complete:
-            cleanup_choice = "1"  # Delete this analysis
-        else:
-            cleanup_choice = "3"  # Keep checkpoints (default for batch mode)
+        cleanup_choice = "3"
+    elif args.batch:
+        # Batch mode - default to keeping checkpoints (use -c or -Z for cleanup)
+        cleanup_choice = "3"  # Keep checkpoints (default for batch mode)
     else:
         # Interactive mode - default to keeping checkpoints
         print("\n✓ Checkpoint files preserved for potential resume")
-        print("  Use --delete-checkpoints flag to auto-delete checkpoints after completion")
+        print("  Use -c/--cleanup-checkpoints or -Z/--cleanup-all-data for per-region cleanup")
         cleanup_choice = "3"  # Default: keep checkpoints
 
     if cleanup_choice == "1":

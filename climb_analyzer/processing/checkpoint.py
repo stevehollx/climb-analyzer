@@ -13,6 +13,25 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
+
+# Custom unpickler to handle module remapping for classes serialized from __main__
+class _CheckpointUnpickler(pickle.Unpickler):
+    """Custom unpickler that remaps classes serialized from __main__ to correct modules."""
+
+    def find_class(self, module, name):
+        if module == "__main__":
+            if name in ("ClimbMetrics", "ClimbIdentifier", "SimpleClimbNode", "ElevationProfile"):
+                module = "climb_analyzer.engine"
+            elif name == "ErrorLogEntry":
+                module = "climb_analyzer.data.elevation"
+        return super().find_class(module, name)
+
+
+def _safe_pickle_load(file_handle):
+    """Load pickle data using custom unpickler that handles __main__ class remapping."""
+    return _CheckpointUnpickler(file_handle).load()
+
+
 try:
     from utils.config_loader import (
         CHECKPOINT_INTERVAL_MIN,
@@ -245,7 +264,7 @@ class ChunkPersistenceManager:
 
         try:
             with open(elevation_complete_file, "rb") as f:
-                elevation_data = pickle.load(f)
+                elevation_data = _safe_pickle_load(f)
 
             # Check if this is a path to SQLite database (new format)
             if "elevation_db_path" in elevation_data:
@@ -346,13 +365,13 @@ class ChunkPersistenceManager:
         try:
             if self.progress_file.exists():
                 with open(self.progress_file, "rb") as f:
-                    progress_data = pickle.load(f)
+                    progress_data = _safe_pickle_load(f)
                 processed_chunks = progress_data.get("processed_chunks", [])
                 total_chunks = progress_data.get("total_chunks", 0)
 
             if self.metadata_file.exists():
                 with open(self.metadata_file, "rb") as f:
-                    metadata = pickle.load(f)
+                    metadata = _safe_pickle_load(f)
 
         except Exception as e:
             print(f"Error loading progress: {e}")
@@ -410,7 +429,7 @@ class ChunkPersistenceManager:
 
         try:
             with open(chunk_file, "rb") as f:
-                chunk_data = pickle.load(f)
+                chunk_data = _safe_pickle_load(f)
             return chunk_data.get("chunk_data", [])
         except Exception as e:
             print(f"Error loading chunk {chunk_index}: {e}")
@@ -498,7 +517,7 @@ class ChunkPersistenceManager:
 
         try:
             with open(self.elevation_progress_file, "rb") as f:
-                elevation_data = pickle.load(f)
+                elevation_data = _safe_pickle_load(f)
 
             coord_mapping = elevation_data.get("coordinate_mapping", {})
             batch_info = elevation_data.get("batch_info", {})
@@ -549,7 +568,7 @@ class ChunkPersistenceManager:
 
         try:
             with open(dedupe_file, "rb") as f:
-                return pickle.load(f)
+                return _safe_pickle_load(f)
         except Exception as e:
             print(f"Error loading deduplication progress: {e}")
             return {}
@@ -591,7 +610,7 @@ class ChunkPersistenceManager:
 
         try:
             with open(boundary_merge_file, "rb") as f:
-                return pickle.load(f)
+                return _safe_pickle_load(f)
         except Exception as e:
             print(f"Error loading boundary merge progress: {e}")
             return {}

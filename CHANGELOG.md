@@ -1,7 +1,7 @@
 # Changelog
 
-## [2.2.1] - 2025-12-15
-- Fix some peak splits not splitting, causing the highest point of the climb to be in the middle of the elevation profile. This was rare, but seen on some very long undulating trails.
+## [2.2.2] - 2025-12-15
+- Fix some peak splits not splitting properly causing a high peak to not be at the end of the climb. Also found a character limit in the elevation profile excel cell so added smart normalization to keep that under the limit for very long climbs.
 
 ## [2.2.0] - 2025-12-13
 - Fixed filtering for motorways and interstates that don't allow pedestrians or cyclists from showing up in results.

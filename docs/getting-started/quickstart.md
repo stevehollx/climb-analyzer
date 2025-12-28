@@ -67,10 +67,10 @@ Analyze climbs within a radius of a city or street address:
 
 ```bash
 # 25 mile radius around Boulder, CO
-./climb-analyzer -a "Boulder, CO" --radius 25
+./climb-analyzer -a "Boulder, CO" --distance 25
 
-# 25 mile radius around Boulder, CO
-./climb-analyzer -a "109 South Lee Street, Stockbridge, GA 30281" --radius 10
+# 10 mile radius around Stockbridge, GA
+./climb-analyzer -a "109 South Lee Street, Stockbridge, GA 30281" --distance 10
 ```
 
 ### Interactive Mode

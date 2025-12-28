@@ -9,7 +9,6 @@ Run this ONCE when first setting up the climb analyzer:
     python setup_wizard.py
 """
 
-import getpass
 import os
 import shutil
 import subprocess
@@ -27,111 +26,11 @@ from climb_analyzer.utils.formatting import (
     print_warning,
 )
 
-# REMOVED: setup_jaxa_credentials() function
-# As of 2024, AW3D30 uses public FTP and doesn't require credentials
-
-
-def check_credentials_exist() -> bool:
-    """
-    Check if credentials exist in .credentials folder.
-
-    Returns:
-        bool: earthdata_exists
-    """
-    from pathlib import Path
-
-    credentials_dir = Path(".credentials")
-    netrc_path = credentials_dir / "netrc"
-
-    earthdata_exists = False
-
-    # Check for Earthdata credentials in netrc
-    if netrc_path.exists():
-        try:
-            with open(netrc_path) as f:
-                content = f.read()
-                earthdata_exists = "urs.earthdata.nasa.gov" in content
-        except PermissionError:
-            # File exists but can't be read - likely permission issue
-            # Assume credentials exist if file is there (just can't read it)
-            earthdata_exists = True
-        except Exception as e:
-            print(f"\n⚠️  Warning: Error reading {netrc_path}: {e}\n")
-            pass
-
-    return earthdata_exists
-
-
-def prompt_earthdata_credentials() -> bool:
-    """
-    Prompt user for NASA Earthdata credentials and save them.
-
-    Returns:
-        True if credentials were saved, False if skipped
-    """
-    print_header("NASA Earthdata Credentials", spacing_before=2)
-    print("Some elevation datasets (SRTM, ASTER) require NASA Earthdata credentials.\n")
-    print("If you don't have an account, you can:")
-    print_list_item("Register at: https://urs.earthdata.nasa.gov/users/new")
-    print_list_item("After registration, approve these applications:")
-    print_list_item("NASA GESDISC DATA ARCHIVE", indent=6)
-    print_list_item("LP DAAC Data Pool", indent=6)
-    print("\nOr you can skip this step and rely on other datasets (AW3D30, NED).")
-
-    response = (
-        input("\nDo you want to set up NASA Earthdata credentials now? [y/N]: ").strip().lower()
-    )
-    if response != "y":
-        print("\nSkipping NASA Earthdata setup.")
-        print("You can still use AW3D30 and other datasets that don't require credentials.")
-        return False
-
-    username = input("\nNASA Earthdata username: ").strip()
-    password = getpass.getpass("NASA Earthdata password: ")
-
-    if not username or not password:
-        print_warning("Invalid credentials. Skipping.")
-        return False
-
-    try:
-        from climb_analyzer.data.dem_downloaders import setup_earthdata_netrc
-
-        success = setup_earthdata_netrc(username, password)
-        if success:
-            print_success("NASA Earthdata credentials saved successfully!")
-            return True
-        else:
-            print_warning("Failed to save credentials.")
-            return False
-    except Exception as e:
-        print_warning(f"Error saving credentials: {e}")
-        return False
-
-
-# REMOVED: prompt_jaxa_credentials() function
-# As of 2024, AW3D30 uses public FTP and doesn't require credentials
-
-
-def check_and_setup_credentials():
-    """
-    Check for existing credentials and prompt user to set them up if missing.
-
-    Returns:
-        bool: earthdata_configured
-    """
-    print_header("Checking Data Source Credentials")
-
-    earthdata_exists = check_credentials_exist()
-
-    # Check Earthdata credentials (required for SRTM and ASTER)
-    if earthdata_exists:
-        print_success("NASA Earthdata credentials found")
-        earthdata_configured = True
-    else:
-        print_warning("NASA Earthdata credentials not found")
-        earthdata_configured = prompt_earthdata_credentials()
-
-    return earthdata_configured
+# REMOVED: NASA Earthdata credential functions
+# As of December 2025, NASA LP DAAC Data Pool was retired.
+# SRTM now uses OpenTopography S3 (public, no auth needed)
+# AW3D30 uses JAXA public FTP (no auth needed)
+# All datasets are now public - no credentials required!
 
 
 def check_command(cmd: str) -> bool:
@@ -761,7 +660,7 @@ def create_default_config(deployment_mode: str) -> dict:
             "ELEVATION_MAX_RETRIES": 3,
             "ELEVATION_BACKOFF_FACTOR": 2.0,
             # === ELEVATION DATASET TIERS ===
-            "ELEVATION_DATASET_TIERS": "primary+secondary+tertiary",  # Options: "primary", "primary+secondary", "primary+secondary+tertiary"
+            "ELEVATION_DATASET_TIERS": "primary+secondary",  # Options: "primary", "primary+secondary"
             # === DATA TRACKING ===
             "OSM_COVERAGE": [],
             "ELEVATION_DATASETS": {},
@@ -1038,30 +937,21 @@ def configure_elevation_dataset_tiers(deployment_mode: str):
     print("     • Uses primary dataset with secondary as fallback")
     print("     • Moderate disk storage (~10-100 GB per region)")
     print("     • Better coverage and gap-filling")
-    print("     • Good balance of accuracy and storage\n")
+    print("     • Maximum accuracy with all available datasets\n")
 
-    print("  3. PRIMARY + SECONDARY + TERTIARY (Maximum Accuracy)")
-    print("     • Uses all available datasets for maximum coverage")
-    print("     • Higher disk storage (~15-150 GB per region)")
-    print("     • Best coverage with multiple fallbacks")
-    print("     • Recommended for comprehensive analysis\n")
-
-    print("Default: PRIMARY + SECONDARY + TERTIARY (maximum accuracy)\n")
+    print("Default: PRIMARY + SECONDARY (recommended)\n")
 
     while True:
-        response = input("Select option [1/2/3]; default 3: ").strip()
+        response = input("Select option [1/2]; default 2: ").strip()
 
         if response == "1":
             tier_setting = "primary"
             break
-        elif response == "2":
+        elif response == "" or response == "2":
             tier_setting = "primary+secondary"
             break
-        elif response == "" or response == "3":
-            tier_setting = "primary+secondary+tertiary"
-            break
         else:
-            print("Invalid choice. Please enter 1, 2, or 3")
+            print("Invalid choice. Please enter 1 or 2")
             continue
 
     # Update config
@@ -1085,16 +975,14 @@ def configure_elevation_dataset_tiers(deployment_mode: str):
         # Show storage estimates
         if tier_setting == "primary":
             print("  Expected storage per region: ~5-50 GB")
-        elif tier_setting == "primary+secondary":
-            print("  Expected storage per region: ~10-100 GB")
         else:
-            print("  Expected storage per region: ~15-150 GB")
+            print("  Expected storage per region: ~10-100 GB")
 
         print()
 
     except Exception as e:
         print(f"\n⚠️  Error saving elevation tier setting: {e}")
-        print("Using default: primary+secondary+tertiary\n")
+        print("Using default: primary+secondary\n")
 
 
 def configure_advanced_settings(deployment_mode: str):
@@ -1227,42 +1115,45 @@ def print_next_steps():
     print("Quick Start:\n")
 
     print("1. Web GUI (Recommended for new users):")
-    print("   python climb_analyzer.py -g\n")
+    print("   ./climb-analyzer -g\n")
 
     print("2. Interactive mode:")
-    print("   python climb_analyzer.py\n")
+    print("   ./climb-analyzer\n")
 
     print("3. Address analysis:")
-    print("   python climb_analyzer.py -a 'Boulder, CO' --radius 25 -u imperial\n")
+    print("   ./climb-analyzer -a 'Boulder, CO' --distance 25\n")
 
     print("4. Single region:")
-    print("   python climb_analyzer.py -r Colorado -s paved -u metric\n")
+    print("   ./climb-analyzer -r Colorado -s paved\n")
 
     print("5. Batch regions:")
-    print("   python climb_analyzer.py -r 'Vermont,New Hampshire,Maine' -s paved\n")
+    print("   ./climb-analyzer -r 'Vermont,New Hampshire,Maine' -s paved\n")
 
     print("6. Data management:")
-    print("   python climb_analyzer.py -D -r Vermont  # Download data")
-    print("   python climb_analyzer.py -U              # Update boundaries")
-    print("   python climb_analyzer.py -C              # Delete checkpoints")
-    print("   python climb_analyzer.py -P              # Delete planet data")
-    print("   python climb_analyzer.py -E              # Delete elevation data")
-    print("   python climb_analyzer.py -A              # Delete all data\n")
+    print("   ./climb-analyzer -D -r Vermont  # Download data only")
+    print("   ./climb-analyzer -U              # Update boundaries")
+    print("   ./climb-analyzer -P              # Delete planet/OSM data")
+    print("   ./climb-analyzer -E              # Delete elevation data")
+    print("   ./climb-analyzer -A              # Delete all data\n")
 
-    print("7. Help:")
-    print("   ./climb-analyzer --help                           # Show help")
-    print("   ./climb-analyzer --help-extended                  # Extended help\n")
+    print("7. Useful options:")
+    print("   --list-regions                   # List available regions")
+    print("   --ignore-checkpoints             # Start fresh (ignore saved progress)")
+    print("   -v, --verbose                    # Show detailed output\n")
 
-    print("8. Other useful commands:")
-    print("   ./climb-analyzer shell                            # Open shell in container")
-    print("   ./climb-analyzer logs                             # View recent logs")
-    print("   ./climb-analyzer setup                            # Re-run setup wizard")
-    print("   ./climb-analyzer build                            # Rebuild Docker image\n")
+    print("8. Help:")
+    print("   ./climb-analyzer --help          # Show help")
+    print("   ./climb-analyzer --help-extended # Extended help with examples\n")
+
+    print("9. Other commands:")
+    print("   ./climb-analyzer shell           # Open shell in container")
+    print("   ./climb-analyzer logs            # View recent logs")
+    print("   ./climb-analyzer setup           # Re-run setup wizard")
+    print("   ./climb-analyzer build           # Rebuild Docker image\n")
 
     print("Documentation:")
-    print("   • CLI_ARGUMENTS_SPEC.md - CLI argument reference")
-    print("   • DOCKER_SETUP.md - Docker usage guide")
-    print("   • INSTALLATION.md - Full installation guide\n")
+    print("   • INSTALLATION.md - Full installation guide")
+    print("   • DOCKER_SETUP.md - Docker usage guide\n")
 
 
 def install_gui_server():
@@ -1417,10 +1308,12 @@ def main():
     print_list_item("Configure deployment mode (LOCAL or CLOUD)")
     print_list_item("Build Docker containers")
     print_list_item("Configure data source types")
-    print_list_item("Store NASA Earthdata credentials for elevation data")
     print_list_item("Optionally install web GUI server")
     print_list_item("Verify the installation")
     print()
+
+    # Note: NASA Earthdata credentials are no longer needed (December 2025)
+    # SRTM now uses OpenTopography S3, AW3D30 uses JAXA FTP - all public!
 
     # Check Python version (for this script)
     if not check_python_version():
@@ -1453,18 +1346,11 @@ def main():
     if mode_ok:
         explain_data_setup(deployment_mode)
 
-    # Check and setup credentials ONLY for local mode (after explaining data setup)
-    earthdata_configured = False
-    if deployment_mode == "local":
-        earthdata_configured = check_and_setup_credentials()
-
-        # Provide summary of credential status
-        print()
-        if not earthdata_configured:
-            print_info(
-                "Note: Without NASA Earthdata credentials, SRTM and ASTER datasets won't be available."
-            )
-            print_info("You can still use AW3D30, NED, and other datasets.")
+    # Note: NASA Earthdata credentials are no longer needed (December 2025)
+    # All elevation datasets now use public sources:
+    # - SRTM: OpenTopography S3 (public)
+    # - AW3D30: JAXA FTP (public)
+    # - NED, ArcticDEM, REMA: AWS S3 (public)
 
     # The wizard returns the user's choice and has already written it to config
     # No need to re-read; trust the wizard's return value

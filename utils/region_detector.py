@@ -370,7 +370,7 @@ def print_unknown_region_error(unknown_regions: List[Dict[str, str]]) -> None:
     print("    - Subregions: 'Bristol', 'Bayern', 'Bretagne'")
     print()
     print("    For city/address searches, use: ./climb-analyzer -a \"<address>\"")
-    print("    Example: ./climb-analyzer -a \"Bryson City, NC\" --radius 25")
+    print("    Example: ./climb-analyzer -a \"Bryson City, NC\" --distance 25")
     print()
     print("    To see all available regions: ./climb-analyzer --list-regions")
     print("    Full region list: https://download.geofabrik.de/")

@@ -24,11 +24,11 @@ def get_version() -> str:
     Read version from pyproject.toml.
 
     Returns:
-        Version string (e.g., "2.2.1")
+        Version string (e.g., "2.2.2")
     """
     if tomllib is None:
         # If tomli is not installed and Python < 3.11, return fallback
-        return "2.2.1"
+        return "2.2.2"
 
     try:
         pyproject_path = Path(__file__).parent / "pyproject.toml"
@@ -37,7 +37,7 @@ def get_version() -> str:
         return pyproject_data["project"]["version"]
     except Exception:
         # Fallback if pyproject.toml can't be read
-        return "2.2.1"
+        return "2.2.2"
 
 
 __version__ = get_version()

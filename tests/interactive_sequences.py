@@ -316,7 +316,7 @@ CLI_COMMANDS = {
     9: ["./climb-analyzer", "-r", "Luxembourg,Belgium", "--allow-cross-country-merge"],
     10: ["./climb-analyzer", "-r", "Oregon,Idaho"],
     11: ["./climb-analyzer", "-g", "27.1,100.1,27.3,100.3"],  # Lijiang bbox
-    12: ["./climb-analyzer", "-a", "8155 Geer Hwy, Cleveland, SC 29635", "--radius", "30"],
+    12: ["./climb-analyzer", "-a", "8155 Geer Hwy, Cleveland, SC 29635", "--distance", "30"],
     # Early exit CLI tests
     15: ["./climb-analyzer", "-r", "Georgia"],  # Should pick European Georgia
     16: ["./climb-analyzer", "-r", "Georgia"],  # Test disambiguation

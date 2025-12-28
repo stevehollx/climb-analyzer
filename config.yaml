@@ -1,3 +1,16 @@
+ANALYZED_REPORTS:
+- canonical_path: Hawaii
+  filename: Hawaii_climbs_all_basic_2025-11-05_v2.0.0_e0000.xlsx
+  region: Hawaii
+- canonical_path: Luxembourg
+  filename: Luxembourg_climbs_all_basic_2025-11-01_v2.0.0_e0000.xlsx
+  region: Luxembourg
+- canonical_path: luxembourg
+  filename: luxembourg_climbs_all_basic_2025-11-05_v2.0.0_e0000.xlsx
+  region: luxembourg
+- canonical_path: monaco
+  filename: monaco_climbs_all_basic_2025-11-05_v2.0.0_e0000.xlsx
+  region: monaco
 CHECKPOINT_INTERVAL_MIN: 15
 CHECKPOINT_MILESTONES_PERC:
 - 10
@@ -5,22 +18,29 @@ CHECKPOINT_MILESTONES_PERC:
 - 50
 - 75
 - 90
+CLOUD_CACHE_ENABLED: true
+CLOUD_CACHE_REPO: stevehollx/global-road-and-trail-climbs
 DEPLOYMENT_TYPE: local
-ENABLE_CROSS_CHUNK_POSTPROCESS: true
 ELEVATION_BACKOFF_FACTOR: 2
 ELEVATION_BATCH_SIZE: 100
+ELEVATION_DATA:
+- aw3d30
+- ned10m
+- srtm30m
+ELEVATION_DATASETS:
+  srtm30m:
+  - us/rhode-island
+  aw3d30:
+  - us/rhode-island
+ELEVATION_DATASET_TIERS: primary+secondary
+ELEVATION_DELAY_BETWEEN_BATCHES_SEC: 0.0
 ELEVATION_MAX_CONCURRENT: 16
 ELEVATION_MAX_RETRIES: 3
 ELEVATION_REQUEST_TIMEOUT_SEC: 45
+ENABLE_CROSS_CHUNK_POSTPROCESS: true
 GEOCODING_MAX_CONCURRENT: 5
 GEOCODING_RETRY_ATTEMPTS: 3
-OVERPASS_API_DELAY_SEC: 0.0
-OVERPASS_API_URL: null
-TOPO_API_BASE_URL: http://opentopodata-server:5000/v1
-ELEVATION_DELAY_BETWEEN_BATCHES_SEC: 0.0
-ELEVATION_DATASET_TIERS: primary+secondary+tertiary
-CLOUD_CACHE_ENABLED: true
-CLOUD_CACHE_REPO: stevehollx/global-road-and-trail-climbs
+OSM_CHUNK_SIZE_KM: 30
 OSM_COVERAGE:
 - Andorra
 - California
@@ -36,17 +56,49 @@ OSM_COVERAGE:
 - Tennessee
 - europe/monaco
 - Rhode Island
-ELEVATION_DATASETS: {}
-OSM_PLANET_DATA:
-- hawaii-latest.osm.pbf
-- monaco-latest.osm.pbf
-- rhode-island-latest.osm.pbf
-OSM_CHUNK_SIZE_KM: 30
-OSM_INDEXES: []
-ELEVATION_DATA: []
+OSM_INDEXES:
+- arizona-latest
+- belgium-latest
+- bristol-latest
+- california-latest
+- colorado-latest
+- connecticut-latest
+- delaware-latest
+- france-latest
+- georgia-latest
+- hawaii-latest
+- idaho-latest
+- illinois-latest
+- kentucky-latest
+- luxembourg-latest
+- maine-latest
+- massachusetts-latest
+- michigan-latest
+- montana-latest
+- nevada-latest
+- new-hampshire-latest
+- new-jersey-latest
+- new-mexico-latest
+- new-york-latest
+- north-carolina-latest
+- ohio-latest
+- oregon-latest
+- pennsylvania-latest
+- rhode-island-latest
+- south-carolina-latest
+- tennessee-latest
+- utah-latest
+- vermont-latest
+- virginia-latest
+- washington-latest
+- west-virginia-latest
+- wisconsin-latest
+- wyoming-latest
+OSM_PLANET_DATA: []
+OVERPASS_API_DELAY_SEC: 0.0
+OVERPASS_API_URL: null
+TOPO_API_BASE_URL: http://opentopodata-server:5000/v1
 merge_rules:
-  max_merge_distance_km: 0.5
-  length_tolerance_percent: 0
   allow_cross_country_merge: false
   allowed_cross_country_merging:
   - France
@@ -75,19 +127,8 @@ merge_rules:
   - Norway
   - Iceland
   - Liechtenstein
+  length_tolerance_percent: 0
+  max_merge_distance_km: 0.5
 xlsx_output:
-  max_file_size_mb: 100
   format_template: default
-ANALYZED_REPORTS:
-- filename: Hawaii_climbs_all_basic_2025-11-05_v2.0.0_e0000.xlsx
-  region: Hawaii
-  canonical_path: Hawaii
-- filename: Luxembourg_climbs_all_basic_2025-11-01_v2.0.0_e0000.xlsx
-  region: Luxembourg
-  canonical_path: Luxembourg
-- filename: luxembourg_climbs_all_basic_2025-11-05_v2.0.0_e0000.xlsx
-  region: luxembourg
-  canonical_path: luxembourg
-- filename: monaco_climbs_all_basic_2025-11-05_v2.0.0_e0000.xlsx
-  region: monaco
-  canonical_path: monaco
+  max_file_size_mb: 100

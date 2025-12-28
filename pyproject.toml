@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "climb-analyzer"
-version = "2.2.1"
+version = "2.2.2"
 description = "Analyze road and trail climbs from OpenStreetMap data"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -54,6 +54,12 @@ dev = [
     "ruff>=0.0.260",
 ]
 
+# Testing dependencies - for E2E test harness
+test = [
+    "pexpect>=4.8.0",           # Interactive test automation
+    "beautifulsoup4>=4.9.0",    # Strava page scraping for validation
+]
+
 # Geographic data utilities - For updating geo definitions
 geo = [
     "geopandas>=0.14.0",  # Geographic data processing (requires GDAL/GEOS system libs)
@@ -65,6 +71,8 @@ all = [
     "rtree>=1.0.0",
     "overpy>=0.6",
     "geopandas>=0.14.0",
+    "pexpect>=4.8.0",
+    "beautifulsoup4>=4.9.0",
 ]
 
 [project.scripts]

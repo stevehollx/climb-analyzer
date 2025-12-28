@@ -20,11 +20,13 @@ def get_required_datasets(
 
     Dataset coverage:
     - NED 10m: US only (18°N to 72°N, -180° to -60°W)
-    - SRTM 30m: 60°N to 56°S (limited to mid-latitudes)
-    - AW3D30: Global except Antarctica (<-60°) - local only
-    - ASTER: Global coverage
+    - SRTM 30m: 60°N to 56°S (OpenTopography S3, no auth needed)
+    - AW3D30: Global 84°N to 84°S (JAXA FTP, no auth needed)
     - ArcticDEM 32m: Arctic regions (>60°N) - local only
     - REMA 32m: Antarctica (<-60°S) - local only
+
+    Note: ASTER is deprecated as of December 2025 (NASA LP DAAC retired).
+    AW3D30 provides better coverage (84°N to 84°S) and better accuracy.
 
     Args:
         lat_min: Minimum latitude
@@ -41,7 +43,7 @@ def get_required_datasets(
     # Antarctica (< -60°S)
     if lat_max < -60:
         if deployment_type == 'local':
-            datasets.append('rema')
+            datasets.append('rema32m')
             return datasets  # REMA is sufficient for Antarctica in local mode
         else:
             # Cloud mode doesn't support Antarctica
@@ -72,38 +74,36 @@ def get_required_datasets(
     # Alaska
     if is_alaska:
         if deployment_type == 'local':
-            datasets.append('arcticdem')
+            datasets.append('arctic32m')
             datasets.append('aw3d30')
-            datasets.append('aster')
         else:
-            # Cloud mode: ASTER only for Alaska
-            datasets.append('aster')
+            # Cloud mode: SRTM for parts within coverage
+            datasets.append('srtm30m')
         return datasets
 
     # Greenland (special case)
     if is_greenland:
         if deployment_type == 'local':
-            datasets.append('arcticdem')
+            datasets.append('arctic32m')
             return datasets  # Only ArcticDEM for Greenland in local mode
         else:
-            # Cloud mode doesn't support Greenland
+            # Cloud mode doesn't support Greenland well
             return []
 
     # Arctic regions (Iceland, Scandinavia, northern Russia, northern Canada)
     if is_arctic:
         if deployment_type == 'local':
-            datasets.append('arcticdem')
+            datasets.append('arctic32m')
             # Add additional coverage for regions that extend below 60°N
             if lat_min < 60:
                 # SRTM for parts below 60°N
                 if lat_min >= -56:
                     datasets.append('srtm30m')
-            # Always add AW3D30 and ASTER for Arctic regions (except Greenland which was handled above)
+            # AW3D30 provides global coverage including high latitudes
             datasets.append('aw3d30')
-            datasets.append('aster')
         else:
-            # Cloud mode: ASTER only for Arctic
-            datasets.append('aster')
+            # Cloud mode: SRTM for parts within coverage
+            datasets.append('srtm30m')
         return datasets
 
     # Mid-latitude regions (SRTM coverage: 60°N to 56°S)
@@ -111,13 +111,12 @@ def get_required_datasets(
         datasets.append('srtm30m')
         if deployment_type == 'local':
             datasets.append('aw3d30')
-        datasets.append('aster')
         return datasets
 
     # Other regions (below SRTM coverage or mixed)
     if deployment_type == 'local':
         datasets.append('aw3d30')
-    datasets.append('aster')
+    datasets.append('srtm30m')
 
     return datasets
 
@@ -131,11 +130,10 @@ def get_dataset_descriptions() -> dict:
     """
     return {
         'ned10m': 'NED 10m - US only, highest quality (10m resolution)',
-        'srtm30m': 'SRTM 30m - Mid-latitudes, good quality (60°N to 56°S)',
-        'aw3d30': 'AW3D30 - Global coverage, good quality (30m resolution)',
-        'aster': 'ASTER GDEM - Global coverage, fallback (30m resolution)',
-        'arcticdem': 'ArcticDEM - Arctic regions, high quality (>60°N, 32m)',
-        'rema': 'REMA - Antarctica, high quality (<-60°S, 32m)'
+        'srtm30m': 'SRTM 30m - Mid-latitudes (60°N to 56°S), OpenTopography S3',
+        'aw3d30': 'AW3D30 - Global coverage 84°N to 84°S (30m resolution)',
+        'arctic32m': 'ArcticDEM - Arctic regions, high quality (>60°N, 32m)',
+        'rema32m': 'REMA - Antarctica, high quality (<-60°S, 32m)'
     }
 
 
@@ -182,10 +180,10 @@ def get_selection_reason(
     Returns:
         Explanation string
     """
-    if dataset == 'rema':
+    if dataset == 'rema32m':
         return "Antarctic region - highest quality for Antarctica"
 
-    elif dataset == 'arcticdem':
+    elif dataset == 'arctic32m':
         if lat_min > 60:
             return "Arctic region - highest quality for high latitudes (>60°N)"
         else:
@@ -198,10 +196,7 @@ def get_selection_reason(
         return "Within SRTM coverage area (60°N to 56°S)"
 
     elif dataset == 'aw3d30':
-        return "Global coverage dataset (30m resolution)"
-
-    elif dataset == 'aster':
-        return "Global fallback dataset (30m resolution)"
+        return "Global coverage dataset (84°N to 84°S, 30m resolution)"
 
     return ""
 

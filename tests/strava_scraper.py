@@ -8,10 +8,14 @@ against real-world cycling data.
 
 import re
 import time
+import json
 import logging
-from dataclasses import dataclass
-from typing import Optional, Dict, Any
+from pathlib import Path
+from dataclasses import dataclass, asdict
+from typing import Optional, Dict, Any, List, Tuple
 from urllib.parse import urljoin
+from datetime import datetime, timedelta
+from difflib import SequenceMatcher
 
 try:
     import requests
@@ -44,9 +48,11 @@ class StravaScraper:
     """Scraper for public Strava segment pages."""
 
     BASE_URL = "https://www.strava.com/segments/"
+    EXPLORE_URL = "https://www.strava.com/segments/explore"
     RETRY_DELAYS = [1, 2, 5]  # Exponential backoff delays in seconds
+    REQUEST_DELAY = 2.0  # Delay between requests in seconds
 
-    def __init__(self):
+    def __init__(self, cache_file: Optional[Path] = None):
         if not HAS_DEPENDENCIES:
             raise ImportError(
                 "StravaScraper requires 'requests' and 'beautifulsoup4'. "
@@ -59,7 +65,44 @@ class StravaScraper:
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.5',
         })
-        self._cache: Dict[str, StravaSegmentData] = {}
+        self._cache: Dict[str, Dict[str, Any]] = {}
+        self._cache_file = cache_file or Path("tests/.strava_cache.json")
+        self._last_request_time = 0
+        self._load_cache()
+
+    def _load_cache(self):
+        """Load cache from disk."""
+        if self._cache_file.exists():
+            try:
+                with open(self._cache_file, 'r') as f:
+                    data = json.load(f)
+                    # Filter out expired entries (7 days)
+                    cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+                    self._cache = {
+                        k: v for k, v in data.items()
+                        if v.get('cached_at', '') > cutoff
+                    }
+                logger.debug(f"Loaded {len(self._cache)} cached Strava entries")
+            except (json.JSONDecodeError, IOError) as e:
+                logger.warning(f"Failed to load Strava cache: {e}")
+                self._cache = {}
+
+    def save_cache(self):
+        """Save cache to disk."""
+        try:
+            self._cache_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._cache_file, 'w') as f:
+                json.dump(self._cache, f, indent=2)
+            logger.debug(f"Saved {len(self._cache)} Strava entries to cache")
+        except IOError as e:
+            logger.warning(f"Failed to save Strava cache: {e}")
+
+    def _rate_limit(self):
+        """Enforce rate limiting between requests."""
+        elapsed = time.time() - self._last_request_time
+        if elapsed < self.REQUEST_DELAY:
+            time.sleep(self.REQUEST_DELAY - elapsed)
+        self._last_request_time = time.time()
 
     def get_segment(self, segment_id: str) -> StravaSegmentData:
         """
@@ -72,9 +115,12 @@ class StravaScraper:
             StravaSegmentData with segment information or error
         """
         # Check cache first
-        if segment_id in self._cache:
-            return self._cache[segment_id]
+        cache_key = f"segment:{segment_id}"
+        if cache_key in self._cache:
+            cached = self._cache[cache_key]
+            return StravaSegmentData(**cached.get('data', {}))
 
+        self._rate_limit()
         url = f"{self.BASE_URL}{segment_id}"
         html = self._fetch_with_retry(url)
 
@@ -91,8 +137,94 @@ class StravaScraper:
             result = self._parse_segment_page(html, segment_id)
 
         # Cache result
-        self._cache[segment_id] = result
+        self._cache[cache_key] = {
+            'data': asdict(result),
+            'cached_at': datetime.now().isoformat()
+        }
+        self.save_cache()
         return result
+
+    def find_matching_segment(
+        self,
+        name: str,
+        lat: float,
+        lon: float,
+        distance_km: float,
+        elev_gain_m: float,
+        search_radius_km: float = 5.0,
+        name_threshold: float = 0.6
+    ) -> Optional[StravaSegmentData]:
+        """
+        Search for a Strava segment matching the given climb data.
+
+        Uses fuzzy name matching and metric comparison to find the best match.
+
+        Args:
+            name: Climb name to search for
+            lat: Latitude of climb start
+            lon: Longitude of climb start
+            distance_km: Expected distance in km
+            elev_gain_m: Expected elevation gain in meters
+            search_radius_km: Search radius in km (default 5)
+            name_threshold: Minimum name similarity ratio (0-1)
+
+        Returns:
+            Best matching StravaSegmentData or None
+        """
+        # Check cache for location search
+        cache_key = f"search:{lat:.4f},{lon:.4f}"
+        segments = []
+
+        if cache_key in self._cache:
+            cached = self._cache[cache_key]
+            segments = [StravaSegmentData(**s) for s in cached.get('segments', [])]
+        else:
+            # Strava explore requires authentication for API, so we can only
+            # use known segment IDs. Return None to fall back to other sources.
+            logger.debug(f"No cached segments for location ({lat}, {lon})")
+            return None
+
+        if not segments:
+            return None
+
+        # Score each segment by name similarity and metric match
+        best_match = None
+        best_score = 0
+
+        for segment in segments:
+            if not segment.is_valid():
+                continue
+
+            # Name similarity
+            name_sim = SequenceMatcher(
+                None, name.lower(), segment.name.lower()
+            ).ratio()
+
+            if name_sim < name_threshold:
+                continue
+
+            # Distance similarity (within 30%)
+            if segment.distance_km > 0:
+                dist_diff = abs(distance_km - segment.distance_km) / segment.distance_km
+                if dist_diff > 0.3:
+                    continue
+            else:
+                continue
+
+            # Elevation similarity (within 30%)
+            if segment.elev_gain_m > 0:
+                elev_diff = abs(elev_gain_m - segment.elev_gain_m) / segment.elev_gain_m
+                if elev_diff > 0.3:
+                    continue
+
+            # Combined score: weight name more heavily
+            score = (name_sim * 0.6) + ((1 - dist_diff) * 0.2) + ((1 - elev_diff) * 0.2)
+
+            if score > best_score:
+                best_score = score
+                best_match = segment
+
+        return best_match
 
     def _fetch_with_retry(self, url: str) -> Optional[str]:
         """
@@ -183,7 +315,7 @@ class StravaScraper:
             location=location
         )
 
-    def _extract_stats_from_page(self, soup: BeautifulSoup) -> Dict[str, Any]:
+    def _extract_stats_from_page(self, soup: "BeautifulSoup") -> Dict[str, Any]:
         """Extract stats from various Strava page layouts."""
         stats = {}
 

@@ -19,14 +19,14 @@ Three mutually exclusive modes:
 Analyze climbs within a radius of an address:
 
 ```bash
-./climb-analyzer -a "Boulder, CO" --radius 25
-./climb-analyzer -a "Seattle, WA" --radius 50 -u metric
+./climb-analyzer -a "Boulder, CO" --distance 25
+./climb-analyzer -a "Seattle, WA" --distance 50 -u metric
 ```
 
 | Option | Description |
 |--------|-------------|
 | `-a`, `--address` | Address for center point |
-| `--radius` | Search radius (required with `-a`) |
+| `--distance` | Search radius in miles (required with `-a`) |
 
 ### Region Mode (`-r`)
 
@@ -153,10 +153,6 @@ Control checkpoint behavior:
 ./climb-analyzer -r "Vermont" -K
 ./climb-analyzer -r "Vermont" --keep-checkpoints
 
-# Delete checkpoints after analysis
-./climb-analyzer -r "Vermont" -C
-./climb-analyzer -r "Vermont" --delete-checkpoints
-
 # Ignore existing checkpoints - start fresh
 ./climb-analyzer -r "Vermont" --ignore-checkpoints
 ```
@@ -164,8 +160,29 @@ Control checkpoint behavior:
 | Option | Description |
 |--------|-------------|
 | `-K`, `--keep-checkpoints` | Keep checkpoint files after analysis |
-| `-C`, `--delete-checkpoints` | Delete checkpoint files after analysis |
 | `--ignore-checkpoints` | Ignore existing checkpoints, start fresh |
+
+### Per-Region Cleanup (Post-Analysis)
+
+Delete data for a specific region after successful analysis:
+
+```bash
+# Delete only checkpoints for this region after analysis
+./climb-analyzer -r "Vermont" -c
+./climb-analyzer -r "Vermont" --cleanup-checkpoints
+
+# Delete checkpoints + OSM + elevation for this region after analysis
+./climb-analyzer -r "Vermont" -Z
+./climb-analyzer -r "Vermont" --cleanup-all-data
+```
+
+| Option | Description |
+|--------|-------------|
+| `-c`, `--cleanup-checkpoints` | Delete checkpoints for THIS region after analysis |
+| `-Z`, `--cleanup-all-data` | Delete checkpoints + OSM + elevation for THIS region after analysis |
+
+!!! note "Per-Region Only"
+    These flags only delete data for the region being analyzed. Other regions' data is preserved.
 
 ### Cloud Upload Control
 
@@ -177,42 +194,48 @@ Control checkpoint behavior:
 !!! note
     Clean analyses (default settings) are auto-uploaded. Use `--no-cloud-upload` to disable.
 
-### Delete OSM Data (`-P`)
+### Global Cleanup Subcommand
 
-Remove all `.pbf` files and spatial indexes:
-
-```bash
-./climb-analyzer -P
-```
-
-### Delete Elevation Data (`-E`)
-
-Remove all DEM elevation tiles:
+Delete all data without running analysis:
 
 ```bash
-./climb-analyzer -E
+# Delete all checkpoints
+./climb-analyzer cleanup --checkpoints
+
+# Delete all OSM data and indexes
+./climb-analyzer cleanup --osm
+
+# Delete all elevation data
+./climb-analyzer cleanup --elevation
+
+# Delete everything (checkpoints + OSM + elevation)
+./climb-analyzer cleanup --all
+
+# Skip confirmation prompts
+./climb-analyzer cleanup --all --force
+
+# Clear unavailable tile cache (re-attempt tiles marked as unavailable)
+./climb-analyzer cleanup --unavailable-cache
+
+# Clear unavailable cache for specific dataset only
+./climb-analyzer cleanup --unavailable-cache --dataset srtm30m
 ```
 
-### Delete All Data (`-A`)
+| Option | Description |
+|--------|-------------|
+| `--checkpoints` | Delete ALL checkpoint files |
+| `--osm` | Delete ALL OSM .pbf files and indexes |
+| `--elevation` | Delete ALL elevation data |
+| `--all` | Delete ALL data |
+| `--unavailable-cache` | Delete .unavailable files (allows re-attempt of marked tiles) |
+| `--dataset NAME` | Only clear unavailable cache for specific dataset (srtm30m, ned10m, aster30m, etc.) |
+| `--force` | Skip confirmation prompts |
 
-Remove all data (checkpoints + OSM + elevation):
+!!! warning "Global Deletion"
+    The cleanup subcommand deletes data for ALL regions. Use `-c` or `-Z` with `-r` for per-region cleanup.
 
-```bash
-./climb-analyzer -A
-```
-
-!!! danger "Confirmation Required"
-    This command requires confirmation before deleting.
-
-### Clean Up After Analysis (`-X`)
-
-Delete OSM and elevation data after analysis completes:
-
-```bash
-./climb-analyzer -r "Vermont" -X
-```
-
-Useful for batch processing to save disk space.
+!!! tip "Unavailable Cache"
+    If tiles were incorrectly marked as unavailable due to authentication or server issues, use `--unavailable-cache` to clear the cache and re-attempt downloading those tiles.
 
 ## GUI Commands
 
@@ -324,7 +347,7 @@ Merge climbs from existing Excel files:
 
 | Flag | Long Form | Description | Default |
 |------|-----------|-------------|---------|
-| - | `--radius` | Search radius (with `-a`) | - |
+| - | `--distance` | Search radius in miles (with `-a`) | - |
 | `-s` | `--surface-filter` | Surface type filter | all |
 | - | `--cycling-filter` | Cycling accessible only | off |
 | `-u` | `--units` | Unit system | auto |
@@ -338,13 +361,22 @@ Merge climbs from existing Excel files:
 | `-U` | `--update-geo-boundaries` | Update boundaries | - |
 | `-D` | `--data-download` | Download data only | - |
 | `-K` | `--keep-checkpoints` | Keep checkpoint files | yes (batch) |
-| `-C` | `--delete-checkpoints` | Delete checkpoints | - |
 | - | `--ignore-checkpoints` | Ignore existing checkpoints | - |
 | - | `--no-cloud-upload` | Skip cloud cache upload | - |
-| `-P` | `--delete-planet-data` | Delete OSM data | - |
-| `-E` | `--delete-elevation-data` | Delete elevation data | - |
-| `-A` | `--delete-all-data` | Delete all data | - |
-| `-X` | `--delete-data-on-complete` | Cleanup after analysis | - |
+| `-c` | `--cleanup-checkpoints` | Delete checkpoints for THIS region after analysis | - |
+| `-Z` | `--cleanup-all-data` | Delete all data for THIS region after analysis | - |
+
+### Cleanup Subcommand
+
+| Flag | Long Form | Description |
+|------|-----------|-------------|
+| - | `cleanup --checkpoints` | Delete ALL checkpoints |
+| - | `cleanup --osm` | Delete ALL OSM data |
+| - | `cleanup --elevation` | Delete ALL elevation data |
+| - | `cleanup --all` | Delete ALL data |
+| - | `cleanup --unavailable-cache` | Delete .unavailable files (re-attempt marked tiles) |
+| - | `cleanup --dataset NAME` | Only clear unavailable cache for specific dataset |
+| - | `cleanup --force` | Skip confirmation prompts |
 
 ### Climb Merging
 
@@ -388,8 +420,8 @@ Merge climbs from existing Excel files:
 # European countries
 ./climb-analyzer -r "Switzerland,Austria,Italy" -u metric -t fiets
 
-# With cleanup after each
-./climb-analyzer -r "VT,NH,ME" -X
+# With per-region cleanup after each (deletes checkpoints + OSM + elevation)
+./climb-analyzer -r "VT,NH,ME" -Z
 ```
 
 ### Data Management
@@ -398,9 +430,11 @@ Merge climbs from existing Excel files:
 # Pre-download data for offline use
 ./climb-analyzer -D -r "Colorado,Utah"
 
-# Clean everything and start fresh
-./climb-analyzer -A
-./climb-analyzer setup
+# Clean up all data globally
+./climb-analyzer cleanup --all
+
+# Delete only checkpoints for a specific region after analysis
+./climb-analyzer -r "Vermont" -c
 ```
 
 ### Advanced Filtering

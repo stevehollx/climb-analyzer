@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
+import yaml
 
 from utils.github_app_client import GitHubAppClient
 
@@ -41,18 +42,18 @@ class CloudCacheManager:
     Uses GitHub App authentication for public sharing without compromising security.
     """
 
-    # GitHub App credentials - prioritize embedded config, fall back to environment
+    # Repository is hardcoded - always use the global climb data repository
+    REPO_OWNER = "stevehollx"
+    REPO_NAME = "global-road-and-trail-climbs"
+
+    # GitHub App credentials - configurable via embedded config or environment
     if _embedded_available:
         GITHUB_APP_ID = _config["app_id"]
         GITHUB_PRIVATE_KEY = _config["private_key"]
-        REPO_OWNER = _config["owner"]
-        REPO_NAME = _config["repo"]
     else:
-        # Fall back to environment variables
+        # Fall back to environment variables for GitHub App credentials only
         GITHUB_APP_ID = os.environ.get("GITHUB_APP_ID", "")
         GITHUB_PRIVATE_KEY = os.environ.get("GITHUB_PRIVATE_KEY", "")
-        REPO_OWNER = "stevehollx"
-        REPO_NAME = "global-road-and-trail-climbs"
 
     # Clean analysis criteria
     CLEAN_SURFACE = "all"
@@ -75,9 +76,7 @@ class CloudCacheManager:
             and "REPLACE_WITH_YOUR_PRIVATE_KEY_HERE" not in self.GITHUB_PRIVATE_KEY
         )
 
-    def is_clean_analysis(
-        self, surface_filter: str, min_score: float, cycling_only: bool
-    ) -> bool:
+    def is_clean_analysis(self, surface_filter: str, min_score: float, cycling_only: bool) -> bool:
         """
         Check if analysis meets "clean" criteria for cloud cache.
 
@@ -146,6 +145,29 @@ class CloudCacheManager:
         name = name.replace(".", "")
         return name
 
+    def get_elevation_datasets(self) -> List[str]:
+        """
+        Get list of elevation datasets from opentopodata config.
+
+        Returns:
+            List of dataset names in priority order (e.g., ['ned10m', 'srtm30m'])
+        """
+        config_path = Path("opentopodata-config.yaml")
+        if not config_path.exists():
+            return []
+
+        try:
+            with open(config_path) as f:
+                config = yaml.safe_load(f)
+
+            datasets = config.get("datasets", [])
+            # Extract dataset names from the list of dicts
+            if isinstance(datasets, list):
+                return [d.get("name", "") for d in datasets if isinstance(d, dict) and d.get("name")]
+            return []
+        except Exception:
+            return []
+
     def get_country_continent(self, country_name: str) -> Optional[str]:
         """
         Get continent name for a country.
@@ -185,13 +207,13 @@ class CloudCacheManager:
         # Find region using geo_lookup
         region_info = find_region(lookup_name)
 
-        if region_info and 'pbf_url' in region_info:
+        if region_info and "pbf_url" in region_info:
             # Extract continent from pbf_url
             # e.g., https://download.geofabrik.de/europe/france-latest.osm.pbf -> europe
-            pbf_url = region_info['pbf_url']
+            pbf_url = region_info["pbf_url"]
             url_path = pbf_url.replace("https://download.geofabrik.de/", "")
             # First segment is continent (e.g., "europe", "north-america")
-            continent_slug = url_path.split('/')[0]
+            continent_slug = url_path.split("/")[0]
 
             # Convert slug to display name
             continent_map = {
@@ -203,7 +225,7 @@ class CloudCacheManager:
                 "north-america": "North America",
                 "south-america": "South America",
             }
-            return continent_map.get(continent_slug, continent_slug.replace('-', ' ').title())
+            return continent_map.get(continent_slug, continent_slug.replace("-", " ").title())
 
         # Default fallback
         print(f"[WARNING] Country '{country_name}' not found in geo_lookup")
@@ -345,9 +367,7 @@ class CloudCacheManager:
 
         # Also check for errors TXT pattern (CSV format inside)
         # Try new format first: {name}_errors_{surface}_{access}_{units}_{date}...
-        new_error_pattern = (
-            r"(.+)_errors_(all-surfaces|paved|gravel|dirt)_(cycling|all-access)_(imperial|metric)_(\d{4}-\d{2}-\d{2})(?:_v[\d.]+_e\d+)?\.txt"
-        )
+        new_error_pattern = r"(.+)_errors_(all-surfaces|paved|gravel|dirt)_(cycling|all-access)_(imperial|metric)_(\d{4}-\d{2}-\d{2})(?:_v[\d.]+_e\d+)?\.txt"
         error_match = re.match(new_error_pattern, filename)
 
         if error_match:
@@ -799,7 +819,9 @@ class CloudCacheManager:
 
             if not should_upload:
                 print(f"  ℹ️  {reason}")
-                print("    Your analysis matches what's already in the cloud cache - no upload needed")
+                print(
+                    "    Your analysis matches what's already in the cloud cache - no upload needed"
+                )
                 return None
             else:
                 print(f"  ✓ Upload validation passed: {reason}")
@@ -835,10 +857,17 @@ class CloudCacheManager:
 
         # Calculate total size for display
         total_size_mb = sum(f.stat().st_size for f in all_files_to_upload) / 1024**2
-        print(f"\n  Uploading {len(all_files_to_upload)} file(s) ({total_size_mb:.1f} MB total) via git push with LFS...")
+        print(
+            f"\n  Uploading {len(all_files_to_upload)} file(s) ({total_size_mb:.1f} MB total) via git push with LFS..."
+        )
 
-        # Build commit message
-        commit_message = f"{'Update' if is_update else 'Add'} {location_name} climb analysis"
+        # Build commit message with dataset info
+        datasets = self.get_elevation_datasets()
+        dataset_str = ", ".join(datasets) if datasets else "unknown"
+        commit_message = (
+            f"{'Update' if is_update else 'Add'} {location_name} climb analysis\n\n"
+            f"Elevation datasets: {dataset_str}"
+        )
 
         # Upload using git push with LFS support
         if not self.github.upload_files_via_git(
@@ -846,7 +875,7 @@ class CloudCacheManager:
             repo_path=cache_path,
             branch_name=branch_name,
             commit_message=commit_message,
-            delete_old_files=deleted_files if deleted_files else None
+            delete_old_files=deleted_files if deleted_files else None,
         ):
             print("  ✗ Failed to upload files via git")
             # Cleanup: delete branch

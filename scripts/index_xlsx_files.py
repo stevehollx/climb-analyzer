@@ -120,12 +120,20 @@ def scan_repository(repo_path: str = ".") -> Dict[str, Dict[str, List[str]]]:
                     for f in sorted_files
                 ]
 
+                # Get file sizes in bytes
+                file_sizes = [
+                    os.path.getsize(os.path.join(root, f))
+                    for f in sorted_files
+                ]
+
                 # Store in index
                 index_data[rel_path] = {
                     "region_name": region_name,
                     "files": sorted_files,
+                    "file_sizes": file_sizes,
                     "download_urls": download_urls,
                     "file_count": len(sorted_files),
+                    "total_size": sum(file_sizes),
                     "has_split_files": any(is_split_file(f) for f in sorted_files)
                 }
 
@@ -136,6 +144,7 @@ def create_summary_stats(index_data: Dict) -> Dict:
     """Create summary statistics for the index."""
     total_regions = len(index_data)
     total_files = sum(region["file_count"] for region in index_data.values())
+    total_size_bytes = sum(region.get("total_size", 0) for region in index_data.values())
     regions_with_splits = sum(1 for region in index_data.values() if region["has_split_files"])
 
     # Group by continent
@@ -149,6 +158,8 @@ def create_summary_stats(index_data: Dict) -> Dict:
     return {
         "total_regions": total_regions,
         "total_files": total_files,
+        "total_size_bytes": total_size_bytes,
+        "total_size_mb": round(total_size_bytes / (1024 * 1024), 1),
         "regions_with_split_files": regions_with_splits,
         "by_continent": by_continent
     }

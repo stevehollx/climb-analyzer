@@ -180,19 +180,8 @@ def scan_elevation_datasets(elevation_data_dir: Path, skip_empty: bool = True) -
         elif skip_empty:
             skipped_empty.append("srtm30m")
 
-    # Check for ASTER (30m resolution)
-    aster_dir = elevation_data_dir / "aster30m"
-    if aster_dir.exists():
-        aster_files = list(aster_dir.glob("ASTGTMV003_*_dem.tif"))
-        if aster_files:
-            print(f"  ✓ Found {len(aster_files)} ASTER tiles")
-            datasets.append({
-                "name": "aster30m",
-                "path": "data/aster30m/",
-                "filename_regex": "ASTGTMV003_.*_dem\\.tif$",  # Only use _dem.tif files
-            })
-        elif skip_empty:
-            skipped_empty.append("aster30m")
+    # NOTE: ASTER is deprecated (December 2025). AW3D30 provides better coverage and accuracy.
+    # Existing ASTER data will still work but new downloads are not supported.
 
     # Check for AW3D30 (30m resolution)
     aw3d30_dir = elevation_data_dir / "aw3d30"
@@ -610,6 +599,49 @@ def start_container(
     except Exception as e:
         print(f"  ❌ Error starting container: {e}")
         return False
+
+
+def get_configured_datasets(
+    base_url: str = "http://localhost:5000",
+    container_name: str = "opentopodata-server"
+) -> set:
+    """
+    Query OpenTopoData server for currently configured datasets.
+
+    Args:
+        base_url: Base URL of OpenTopoData server
+        container_name: Container name for Docker network access
+
+    Returns:
+        Set of dataset names configured on the server, or empty set if query fails
+    """
+    # Determine if running inside Docker container
+    in_docker = Path("/.dockerenv").exists()
+
+    # Build list of URLs to try
+    urls_to_try = []
+
+    if in_docker:
+        # Inside Docker - try container name first
+        urls_to_try.append(f"http://{container_name}:5000/datasets")
+        urls_to_try.append(f"{base_url}/datasets")
+    else:
+        # On host - try localhost first
+        urls_to_try.append(f"{base_url}/datasets")
+
+    for url in urls_to_try:
+        try:
+            response = requests.get(url, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                # Response format: {"results": [{"name": "ned10m", ...}, ...]}
+                if "results" in data and isinstance(data["results"], list):
+                    return {ds["name"] for ds in data["results"] if "name" in ds}
+        except Exception:
+            continue  # Try next URL
+
+    # If all attempts failed, return empty set
+    return set()
 
 
 def check_server_health(

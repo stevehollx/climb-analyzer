@@ -8,11 +8,30 @@ import sys
 from pathlib import Path
 from datetime import datetime
 
+
+# Custom unpickler to handle module remapping for classes serialized from __main__
+class _InspectUnpickler(pickle.Unpickler):
+    """Custom unpickler that remaps classes serialized from __main__ to correct modules."""
+
+    def find_class(self, module, name):
+        if module == "__main__":
+            if name in ("ClimbMetrics", "ClimbIdentifier", "SimpleClimbNode", "ElevationProfile"):
+                module = "climb_analyzer.engine"
+            elif name == "ErrorLogEntry":
+                module = "climb_analyzer.data.elevation"
+        return super().find_class(module, name)
+
+
+def _safe_pickle_load(file_handle):
+    """Load pickle data using custom unpickler that handles __main__ class remapping."""
+    return _InspectUnpickler(file_handle).load()
+
+
 def inspect_checkpoint(checkpoint_path):
     """Inspect and display checkpoint contents."""
     try:
         with open(checkpoint_path, 'rb') as f:
-            data = pickle.load(f)
+            data = _safe_pickle_load(f)
 
         print(f"\n{'='*60}")
         print(f"Checkpoint: {checkpoint_path.name}")
