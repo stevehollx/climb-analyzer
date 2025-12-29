@@ -140,10 +140,10 @@ class ErrorLogger:
                         cycling_status = "enabled" if self.cycling_allowed else "disabled"
                         self.elevation_log_file.write(f"# Cycling Filter: {cycling_status}\n")
 
-                    # Add successful datasets information
+                    # Add successful datasets information (numbered by priority order)
                     if self.successful_datasets:
-                        datasets_str = " → ".join(self.successful_datasets)
-                        self.elevation_log_file.write(f"# Elevation Data Sources: {datasets_str}\n")
+                        datasets_str = ", ".join(f"{i}. {ds}" for i, ds in enumerate(self.successful_datasets, 1))
+                        self.elevation_log_file.write(f"# Elevation Data Sources (priority order): {datasets_str}\n")
                     else:
                         self.elevation_log_file.write("# Elevation Data Sources: Unknown\n")
 
@@ -187,6 +187,10 @@ class ErrorLogger:
                 in_header = True
                 for line in lines:
                     if in_header and line.startswith('#'):
+                        # Update the datasets line if we now have successful datasets
+                        if "# Elevation Data Sources:" in line and self.successful_datasets:
+                            datasets_str = ", ".join(f"{i}. {ds}" for i, ds in enumerate(self.successful_datasets, 1))
+                            line = f"# Elevation Data Sources (priority order): {datasets_str}\n"
                         header_lines.append(line)
                     elif in_header and not line.startswith('#') and line.strip():
                         # This is the CSV header row
