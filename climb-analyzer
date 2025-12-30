@@ -171,6 +171,26 @@ COMPOSE_CMD=$(get_compose_cmd)
 export HOST_UID=$(id -u)
 export HOST_GID=$(id -g)
 
+# Export Docker group ID for socket access (needed for rebuilding OpenTopoData from container)
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS: Docker Desktop manages socket permissions differently
+    # Use the docker socket's group ID if accessible
+    if [ -S /var/run/docker.sock ]; then
+        export DOCKER_GID=$(stat -f '%g' /var/run/docker.sock)
+    else
+        export DOCKER_GID=0  # root group on macOS
+    fi
+else
+    # Linux: Get the docker group GID
+    if getent group docker >/dev/null 2>&1; then
+        export DOCKER_GID=$(getent group docker | cut -d: -f3)
+    elif [ -S /var/run/docker.sock ]; then
+        export DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)
+    else
+        export DOCKER_GID=999  # fallback
+    fi
+fi
+
 # Create or update .env file with correct UID/GID if it doesn't exist
 if [ ! -f ".env" ]; then
     if [ -f ".env.example" ]; then
@@ -181,12 +201,14 @@ if [ ! -f ".env" ]; then
             # macOS sed syntax
             sed -i '' "s/^HOST_UID=.*/HOST_UID=$HOST_UID/" .env
             sed -i '' "s/^HOST_GID=.*/HOST_GID=$HOST_GID/" .env
+            sed -i '' "s/^DOCKER_GID=.*/DOCKER_GID=$DOCKER_GID/" .env
         else
             # Linux sed syntax
             sed -i "s/^HOST_UID=.*/HOST_UID=$HOST_UID/" .env
             sed -i "s/^HOST_GID=.*/HOST_GID=$HOST_GID/" .env
+            sed -i "s/^DOCKER_GID=.*/DOCKER_GID=$DOCKER_GID/" .env
         fi
-        print_success "Created .env with HOST_UID=$HOST_UID, HOST_GID=$HOST_GID"
+        print_success "Created .env with HOST_UID=$HOST_UID, HOST_GID=$HOST_GID, DOCKER_GID=$DOCKER_GID"
     fi
 fi
 

@@ -805,10 +805,14 @@ def rebuild_and_restart(
         # Check if Docker socket is accessible
         if not is_docker_running(verbose=True):
             print("\n⚠️  Docker socket not accessible from inside container")
-            print("     Config updated, but rebuild requires Docker socket mount")
-            print("\nTo fix: Add Docker socket mount to docker-compose.yml:")
-            print("  volumes:")
-            print("    - /var/run/docker.sock:/var/run/docker.sock")
+            print("     This is likely a permission issue with DOCKER_GID")
+            print("\nPossible fixes:")
+            print("  1. Exit and restart: ./climb-analyzer stop && ./climb-analyzer run")
+            print("     (This re-detects DOCKER_GID and recreates the container)")
+            print("  2. Manually check docker group: getent group docker")
+            print("     Then set DOCKER_GID in .env to match")
+            print("  3. Verify socket is mounted: docker-compose.yml should have:")
+            print("     - /var/run/docker.sock:/var/run/docker.sock")
             return False
 
         print("\n✓ Docker socket accessible - proceeding with rebuild")
