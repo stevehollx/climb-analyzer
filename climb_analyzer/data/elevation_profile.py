@@ -13,12 +13,13 @@ def determine_segment_interval(total_distance_m: float) -> float:
     """
     Determine optimal segment interval based on climb length.
 
-    Resolution strategy for cyclist perception:
-    - Short climbs (<1km): 25-30m intervals for fine detail
+    Resolution strategy - preserves detail for short climbs, scales for long trails:
+    - Short climbs (<1km): 25m intervals for fine detail
     - Standard climbs (1-5km): 50m intervals
     - Medium climbs (5-10km): 75m intervals
-    - Long climbs (10-20km): 100m intervals
-    - Epic climbs (>20km): 150m intervals to prevent data bloat
+    - Long climbs (>10km): Dynamically scaled to target max 2500 segments
+      This ensures profiles fit within Excel's 32,767 char limit even for
+      ultra-long trails like the Great Himalaya Trail (1700km) or PCT (4265km)
 
     Args:
         total_distance_m: Total climb distance in meters
@@ -32,10 +33,12 @@ def determine_segment_interval(total_distance_m: float) -> float:
         return 50
     elif total_distance_m < 10000:
         return 75
-    elif total_distance_m < 20000:
-        return 100
     else:
-        return 150
+        # Scale interval to target max 1500 evenly-spaced segments
+        # Critical points (peaks, valleys) add ~10-20% more segments
+        # With ~15 chars/segment, 1800 total segments = 27,000 chars
+        # This fits within Excel's 32,767 char cell limit with margin
+        return max(100, total_distance_m / 1500)
 
 
 def haversine_distance(node1: Dict, node2: Dict) -> float:
@@ -257,14 +260,15 @@ def generate_elevation_profile(nodes: List[Dict], elevations: List[float]) -> st
         elif grade < -50.0:
             grade = -50.0
 
-        # Format: "dist,ele,grade" (rounded for compactness)
-        # dist: 1 decimal, ele: 1 decimal, grade: 2 decimals
-        segment_str = f"{distances[idx]:.1f},{elevations[idx]:.1f},{grade:.2f}"
+        # Format: "dist,ele,grade" (compact format for long trails)
+        # dist: integer meters, ele: integer meters, grade: 1 decimal
+        # This reduces ~20 chars/segment to ~12 chars/segment
+        segment_str = f"{int(distances[idx])},{int(elevations[idx])},{grade:.1f}"
         profile_parts.append(segment_str)
 
     # Add final point (grade = 0 for last segment since there's no "next" point)
     last_idx = filtered_indices[-1]
-    profile_parts.append(f"{distances[last_idx]:.1f},{elevations[last_idx]:.1f},0.00")
+    profile_parts.append(f"{int(distances[last_idx])},{int(elevations[last_idx])},0.0")
 
     # Step 7: Join with pipe delimiter
     return "|".join(profile_parts)
@@ -355,8 +359,12 @@ def downsample_profile(profile_str: str, max_chars: int = 30000) -> str:
     # Combine critical and sampled indices, sort by position
     keep_indices = sorted(set(critical_indices + sampled_indices))
 
-    # Build result
-    result_parts = [parsed[i]["original"] for i in keep_indices]
+    # Build result using compact format (int dist, int elev, 1 decimal grade)
+    # This ensures consistent output regardless of input format
+    result_parts = []
+    for i in keep_indices:
+        p = parsed[i]
+        result_parts.append(f"{int(p['dist'])},{int(p['elev'])},{p['grade']:.1f}")
     return "|".join(result_parts)
 
 
