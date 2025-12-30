@@ -1,7 +1,7 @@
 # Data directories (large files, generated)
-data/
-output/
-opentopodata/
+/data/
+/output/
+/opentopodata/
 
 # Credentials and secrets
 .credentials/
