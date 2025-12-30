@@ -7,12 +7,13 @@ interface ElevationProfileProps {
   climb: Climb;
   onClose: () => void;
   hideHeader?: boolean;
+  units?: 'imperial' | 'metric';  // Optional units override
 }
 
 interface ProfilePoint {
-  distance: number;
-  elevation: number;
-  grade: number;
+  distance: number;  // in miles (imperial) or km (metric)
+  elevation: number; // in feet (imperial) or meters (metric)
+  grade: number;     // percentage
 }
 
 interface TooltipData {
@@ -23,11 +24,9 @@ interface TooltipData {
   grade: number;
 }
 
-// Grade color mapping based on your specifications
+// Grade color mapping based on cycling grade standards
 const getGradeColor = (grade: number): string => {
-  // Descents (negative grades) are gray
   if (grade < 0) return '#808080';             // Descents are gray
-
   const absGrade = Math.abs(grade);
   if (absGrade <= 2) return '#00b050';        // 0-2% green
   if (absGrade <= 5) return '#92d050';        // 3-5% yellow-green
@@ -49,7 +48,208 @@ const getGradeLabel = (grade: number): string => {
   return 'Extreme';
 };
 
-export function ElevationProfile({ climb, onClose, hideHeader = false }: ElevationProfileProps) {
+/**
+ * LTTB (Largest-Triangle-Three-Buckets) downsampling algorithm
+ * Preserves visual fidelity while reducing point count
+ * Also preserves steep sections (>10% grade) and peaks/valleys
+ */
+function lttbDownsample(data: ProfilePoint[], threshold: number): ProfilePoint[] {
+  if (data.length <= threshold) return data;
+
+  const sampled: ProfilePoint[] = [];
+
+  // Always keep first and last points
+  sampled.push(data[0]);
+
+  // Identify critical points to always preserve
+  const criticalIndices = new Set<number>();
+  criticalIndices.add(0);
+  criticalIndices.add(data.length - 1);
+
+  // Preserve steep sections (>10% grade)
+  for (let i = 0; i < data.length; i++) {
+    if (Math.abs(data[i].grade) > 10) {
+      criticalIndices.add(i);
+    }
+  }
+
+  // Preserve peaks and valleys
+  for (let i = 1; i < data.length - 1; i++) {
+    const prev = data[i - 1].elevation;
+    const curr = data[i].elevation;
+    const next = data[i + 1].elevation;
+
+    // Local maximum (peak)
+    if (curr > prev && curr > next) {
+      criticalIndices.add(i);
+    }
+    // Local minimum (valley)
+    if (curr < prev && curr < next) {
+      criticalIndices.add(i);
+    }
+    // Grade sign change (descent boundary)
+    if ((data[i - 1].grade >= 0 && data[i].grade < -1) ||
+        (data[i - 1].grade < -1 && data[i].grade >= 0)) {
+      criticalIndices.add(i);
+    }
+  }
+
+  // Calculate remaining slots after critical points
+  const criticalArray = Array.from(criticalIndices).sort((a, b) => a - b);
+  const remainingSlots = threshold - criticalArray.length;
+
+  if (remainingSlots <= 0) {
+    // Just return critical points
+    return criticalArray.map(i => data[i]);
+  }
+
+  // LTTB for non-critical points
+  const bucketSize = (data.length - 2) / (remainingSlots + 1);
+  let selectedIndex = 0;
+
+  for (let i = 0; i < remainingSlots; i++) {
+    const bucketStart = Math.floor((i + 1) * bucketSize) + 1;
+    const bucketEnd = Math.floor((i + 2) * bucketSize) + 1;
+
+    // Calculate average point of next bucket (for triangle calculation)
+    let avgX = 0, avgY = 0;
+    const nextBucketStart = Math.min(bucketEnd, data.length - 1);
+    const nextBucketEnd = Math.min(Math.floor((i + 3) * bucketSize) + 1, data.length);
+    const nextBucketSize = nextBucketEnd - nextBucketStart;
+
+    if (nextBucketSize > 0) {
+      for (let j = nextBucketStart; j < nextBucketEnd; j++) {
+        avgX += data[j].distance;
+        avgY += data[j].elevation;
+      }
+      avgX /= nextBucketSize;
+      avgY /= nextBucketSize;
+    }
+
+    // Find point that creates largest triangle
+    let maxArea = -1;
+    let maxIndex = bucketStart;
+
+    for (let j = bucketStart; j < bucketEnd && j < data.length - 1; j++) {
+      // Skip if already a critical point
+      if (criticalIndices.has(j)) continue;
+
+      // Calculate triangle area
+      const area = Math.abs(
+        (data[selectedIndex].distance - avgX) * (data[j].elevation - data[selectedIndex].elevation) -
+        (data[selectedIndex].distance - data[j].distance) * (avgY - data[selectedIndex].elevation)
+      );
+
+      if (area > maxArea) {
+        maxArea = area;
+        maxIndex = j;
+      }
+    }
+
+    if (!criticalIndices.has(maxIndex)) {
+      criticalIndices.add(maxIndex);
+    }
+    selectedIndex = maxIndex;
+  }
+
+  // Combine and sort all selected indices
+  const allIndices = Array.from(criticalIndices).sort((a, b) => a - b);
+  return allIndices.map(i => data[i]);
+}
+
+/**
+ * Parse, process, and prepare elevation profile data
+ * - Converts units from source format (meters for distance, configurable for elevation)
+ * - Detects and reverses descending profiles
+ * - Recalculates grades from actual elevation/distance data
+ * - Applies LTTB downsampling for performance
+ */
+function processElevationProfile(
+  profileString: string,
+  units: 'imperial' | 'metric'
+): ProfilePoint[] {
+  if (!profileString) return [];
+
+  const segments = profileString.split('|');
+  if (segments.length < 2) return [];
+
+  // Parse raw data - source format is: dist(meters),elevation(feet or meters),grade
+  // Distance is ALWAYS in meters from Python source
+  // Elevation is in feet if imperial, meters if metric (based on --units flag during analysis)
+  let rawData = segments.map(segment => {
+    const parts = segment.split(',').map(parseFloat);
+    if (parts.length !== 3 || parts.some(isNaN)) return null;
+
+    const distMeters = parts[0];
+    const elevation = parts[1];  // Already in correct units from source
+
+    return {
+      distMeters,
+      elevation,
+      grade: 0  // Will be recalculated
+    };
+  }).filter((p): p is { distMeters: number; elevation: number; grade: number } => p !== null);
+
+  if (rawData.length < 2) return [];
+
+  // Detect descending profile (first elevation > last elevation)
+  // If so, reverse to show ascending from left to right
+  const firstEle = rawData[0].elevation;
+  const lastEle = rawData[rawData.length - 1].elevation;
+
+  if (firstEle > lastEle) {
+    // Reverse the profile
+    rawData = rawData.reverse();
+
+    // Recalculate distances from start
+    const maxDist = rawData[rawData.length - 1].distMeters;
+    rawData = rawData.map(p => ({
+      ...p,
+      distMeters: maxDist - p.distMeters
+    }));
+
+    // Sort by distance (should already be sorted after reversal, but ensure it)
+    rawData.sort((a, b) => a.distMeters - b.distMeters);
+  }
+
+  // Recalculate grades from actual elevation/distance data
+  // This is defensive - handles any inaccuracies in source data
+  for (let i = 0; i < rawData.length; i++) {
+    if (i + 1 < rawData.length) {
+      const elevDelta = rawData[i + 1].elevation - rawData[i].elevation;
+      const distDelta = rawData[i + 1].distMeters - rawData[i].distMeters;
+
+      // Convert elevation delta to meters if in feet for grade calculation
+      const elevDeltaMeters = units === 'imperial' ? elevDelta / 3.28084 : elevDelta;
+
+      if (distDelta > 0) {
+        rawData[i].grade = (elevDeltaMeters / distDelta) * 100;
+        // Cap at reasonable max (roads rarely exceed 35%)
+        if (rawData[i].grade > 50) rawData[i].grade = 50;
+        if (rawData[i].grade < -50) rawData[i].grade = -50;
+      }
+    } else {
+      rawData[i].grade = 0;  // Last point
+    }
+  }
+
+  // Convert to display units
+  const points: ProfilePoint[] = rawData.map(p => ({
+    distance: units === 'imperial' ? p.distMeters / 1609.34 : p.distMeters / 1000,  // miles or km
+    elevation: p.elevation,  // Already in correct units
+    grade: p.grade
+  }));
+
+  // Apply LTTB downsampling if too many points (limit to ~50 for smooth rendering)
+  const MAX_POINTS = 50;
+  if (points.length > MAX_POINTS) {
+    return lttbDownsample(points, MAX_POINTS);
+  }
+
+  return points;
+}
+
+export function ElevationProfile({ climb, onClose, hideHeader = false, units = 'imperial' }: ElevationProfileProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [tooltip, setTooltip] = useState<TooltipData | null>(null);
   const [points, setPoints] = useState<ProfilePoint[]>([]);
@@ -59,6 +259,10 @@ export function ElevationProfile({ climb, onClose, hideHeader = false }: Elevati
     padding: { top: number; right: number; bottom: number; left: number };
   } | null>(null);
 
+  // Unit labels
+  const distanceUnit = units === 'imperial' ? 'mi' : 'km';
+  const elevationUnit = units === 'imperial' ? 'ft' : 'm';
+
   useEffect(() => {
     if (!canvasRef.current || !climb.elevationProfile) return;
 
@@ -66,15 +270,10 @@ export function ElevationProfile({ climb, onClose, hideHeader = false }: Elevati
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Parse elevation profile data
-    const segments = climb.elevationProfile.split('|');
-    const points: ProfilePoint[] = segments.map(segment => {
-      const [dist, ele, grade] = segment.split(',').map(parseFloat);
-      // Convert distance from feet to miles (distance is cumulative in feet)
-      return { distance: dist / 5280, elevation: ele, grade };
-    });
+    // Process elevation profile with all improvements
+    const processedPoints = processElevationProfile(climb.elevationProfile, units);
 
-    if (points.length === 0) return;
+    if (processedPoints.length === 0) return;
 
     // Get actual display size and device pixel ratio for crisp rendering
     const rect = canvas.getBoundingClientRect();
@@ -100,17 +299,17 @@ export function ElevationProfile({ climb, onClose, hideHeader = false }: Elevati
     ctx.fillRect(0, 0, width, height);
 
     // Find data ranges
-    const maxDist = Math.max(...points.map(p => p.distance));
-    const minEle = Math.min(...points.map(p => p.elevation));
-    const maxEle = Math.max(...points.map(p => p.elevation));
-    const eleRange = maxEle - minEle;
+    const maxDist = Math.max(...processedPoints.map(p => p.distance));
+    const minEle = Math.min(...processedPoints.map(p => p.elevation));
+    const maxEle = Math.max(...processedPoints.map(p => p.elevation));
+    const eleRange = maxEle - minEle || 1;  // Avoid division by zero
 
     // Scale functions
     const xScale = (dist: number) => padding.left + (dist / maxDist) * chartWidth;
     const yScale = (ele: number) => padding.top + chartHeight - ((ele - minEle) / eleRange) * chartHeight;
 
     // Save points and scales for mouse interaction
-    setPoints(points);
+    setPoints(processedPoints);
     setScales({ xScale, yScale, padding });
 
     // Draw grid lines
@@ -133,7 +332,7 @@ export function ElevationProfile({ climb, onClose, hideHeader = false }: Elevati
       ctx.font = '12px sans-serif';
       ctx.textAlign = 'right';
       ctx.textBaseline = 'middle';
-      ctx.fillText(`${Math.round(ele)} ft`, padding.left - 10, y);
+      ctx.fillText(`${Math.round(ele)} ${elevationUnit}`, padding.left - 10, y);
     }
 
     // Vertical grid lines (distance)
@@ -152,15 +351,15 @@ export function ElevationProfile({ climb, onClose, hideHeader = false }: Elevati
       ctx.font = '12px sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
-      ctx.fillText(`${dist.toFixed(1)} mi`, x, padding.top + chartHeight + 10);
+      ctx.fillText(`${dist.toFixed(1)} ${distanceUnit}`, x, padding.top + chartHeight + 10);
     }
 
     // Draw elevation profile with color-coded filled areas
     const baselineY = padding.top + chartHeight;
 
-    for (let i = 0; i < points.length - 1; i++) {
-      const p1 = points[i];
-      const p2 = points[i + 1];
+    for (let i = 0; i < processedPoints.length - 1; i++) {
+      const p1 = processedPoints[i];
+      const p2 = processedPoints[i + 1];
 
       // Use the grade of the segment for coloring
       const avgGrade = (p1.grade + p2.grade) / 2;
@@ -205,14 +404,14 @@ export function ElevationProfile({ climb, onClose, hideHeader = false }: Elevati
     ctx.translate(15, padding.top + chartHeight / 2);
     ctx.rotate(-Math.PI / 2);
     ctx.textAlign = 'center';
-    ctx.fillText('Elevation (ft)', 0, 0);
+    ctx.fillText(`Elevation (${elevationUnit})`, 0, 0);
     ctx.restore();
 
     // Title
     ctx.font = 'bold 16px sans-serif';
     ctx.fillText(`${climb.streetName} - Elevation Profile`, width / 2, 20);
 
-  }, [climb]);
+  }, [climb, units]);
 
   const handleMouseMove = (event: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current || !points.length || !scales) return;
@@ -271,6 +470,10 @@ export function ElevationProfile({ climb, onClose, hideHeader = false }: Elevati
     setTooltip(null);
   };
 
+  // Unit labels for tooltip
+  const distanceUnitLabel = units === 'imperial' ? 'mi' : 'km';
+  const elevationUnitLabel = units === 'imperial' ? 'ft' : 'm';
+
   if (!climb.elevationProfile) {
     return null;
   }
@@ -311,8 +514,8 @@ export function ElevationProfile({ climb, onClose, hideHeader = false }: Elevati
             >
               <div className="font-semibold mb-1">Climb Data</div>
               <div className="space-y-0.5">
-                <div>Distance: <span className="font-mono">{tooltip.distance.toFixed(2)} mi</span></div>
-                <div>Elevation: <span className="font-mono">{Math.round(tooltip.elevation)} ft</span></div>
+                <div>Distance: <span className="font-mono">{tooltip.distance.toFixed(2)} {distanceUnitLabel}</span></div>
+                <div>Elevation: <span className="font-mono">{Math.round(tooltip.elevation)} {elevationUnitLabel}</span></div>
                 <div>Grade: <span className="font-mono" style={{ color: getGradeColor(tooltip.grade) }}>{tooltip.grade.toFixed(1)}%</span></div>
               </div>
             </div>
@@ -321,7 +524,7 @@ export function ElevationProfile({ climb, onClose, hideHeader = false }: Elevati
 
         {/* X-axis label as HTML text */}
         <div className="text-center text-sm font-bold text-gray-900 py-2 pb-4 bg-white">
-          Distance (mi)
+          Distance ({distanceUnitLabel})
         </div>
       </div>
 

@@ -143,11 +143,11 @@ function parseProgressLine(line: string, progress: Progress): Progress {
     newProgress.phaseNumber = 5;
     newProgress.totalPhases = 6;
     newProgress.stepDescription = 'Detecting and scoring climbs...';
-  } else if (line.includes('Step 6:') && line.includes('Post-processing')) {
-    newProgress.phase = 'Post-processing';
+  } else if (line.includes('Step 6:') && (line.includes('Post-processing') || line.includes('merge') || line.includes('Boundary'))) {
+    newProgress.phase = 'Finalizing';
     newProgress.phaseNumber = 6;
     newProgress.totalPhases = 6;
-    newProgress.stepDescription = 'Post-processing cross-chunk merges...';
+    newProgress.stepDescription = 'Finalizing and merging climbs...';
   } else if (line.includes('Writing output') || line.includes('Generating results') || line.includes('Saving')) {
     newProgress.phase = 'Generating Output';
     newProgress.phaseNumber = 6;
@@ -176,14 +176,14 @@ function parseProgressLine(line: string, progress: Progress): Progress {
       newProgress.stepDescription = `Analyzing segment ${completed} of ${total}`;
     } else if (newProgress.phase === 'Enriching Elevation') {
       newProgress.stepDescription = `Enriching climb ${completed} of ${total}`;
-    } else if (newProgress.phase === 'Post-processing') {
+    } else if (newProgress.phase === 'Finalizing') {
       // Check if this is "Finding splits" or "Applying merges" from tqdm desc
       if (line.includes('Finding splits')) {
         newProgress.stepDescription = `Finding cross-chunk splits: ${completed} of ${total} streets`;
       } else if (line.includes('Applying merges')) {
         newProgress.stepDescription = `Applying merges: ${completed} of ${total}`;
       } else {
-        newProgress.stepDescription = `Post-processing: ${completed} of ${total}`;
+        newProgress.stepDescription = `Finalizing: ${completed} of ${total}`;
       }
     } else {
       newProgress.stepDescription = `Processing item ${completed} of ${total}`;
@@ -242,7 +242,7 @@ export async function POST(request: Request): Promise<Response> {
         );
       }
       args.push('--address', config.address);
-      args.push('--radius', config.radius.toString());
+      args.push('--distance', config.radius.toString());
     } else if (config.mode === 'region') {
       if (!config.region) {
         return NextResponse.json(
@@ -280,9 +280,9 @@ export async function POST(request: Request): Promise<Response> {
       args.push('--min-score', config.minScore.toString());
     }
 
-    // Delete data on complete
+    // Delete data on complete (cleanup all data for this region after analysis)
     if (config.deleteDataOnComplete) {
-      args.push('--delete-data-on-complete');
+      args.push('--cleanup-all-data');
     }
 
     // Cloud cache upload - read from global config

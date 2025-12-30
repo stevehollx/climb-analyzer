@@ -14,7 +14,6 @@ Usage:
 """
 
 import argparse
-import getpass
 import os
 import sys
 from pathlib import Path
@@ -29,121 +28,17 @@ from climb_analyzer.data.geo_lookup import is_us_state, get_region_bounds
 
 def get_earthdata_credentials() -> tuple[str, str] | None:
     """
-    Get NASA Earthdata credentials from environment or prompt user.
+    DEPRECATED: NASA Earthdata credentials no longer needed (December 2025).
 
-    Stores credentials in EARTHDATA_USER and EARTHDATA_PASS environment variables.
+    All elevation datasets now use public sources:
+    - SRTM: OpenTopography S3 (public)
+    - NED: AWS S3 (public)
+    - AW3D30: JAXA FTP (public)
+    - ASTER: Data source retired December 2025
 
     Returns:
-        Tuple of (username, password) or None if user skips
+        None - credentials are no longer required
     """
-    # Check if credentials already exist in environment
-    username = os.environ.get('EARTHDATA_USER')
-    password = os.environ.get('EARTHDATA_PASS')
-
-    if username and password:
-        print(f"\n✓ Using existing NASA Earthdata credentials (username: {username})")
-        return (username, password)
-
-    # Check for credentials in .netrc file
-    # The .credentials directory is mounted from host at /app/.credentials (see docker-compose.yml line 26)
-    try:
-        import netrc
-        from pathlib import Path
-
-        # Primary location: .credentials/netrc
-        # In Docker: /app/.credentials/netrc (mounted from host)
-        # On host: ./.credentials/netrc (relative to current directory)
-        if Path("/app/.credentials/netrc").exists():
-            netrc_path = Path("/app/.credentials/netrc")
-        else:
-            netrc_path = Path(".credentials/netrc")
-
-        if netrc_path.exists():
-            try:
-                netrc_info = netrc.netrc(str(netrc_path))
-                creds = netrc_info.authenticators("urs.earthdata.nasa.gov")
-                if creds:
-                    username, _, password = creds
-                    print(f"\n✓ Found NASA Earthdata credentials (username: {username})")
-                    # Store in environment for this session
-                    os.environ['EARTHDATA_USER'] = username
-                    os.environ['EARTHDATA_PASS'] = password
-                    return (username, password)
-            except netrc.NetrcParseError:
-                # Netrc module failed (likely due to permissions on exFAT/SMB filesystem)
-                # Fall back to manual parsing
-                try:
-                    with open(netrc_path) as f:
-                        lines = f.readlines()
-                        machine_found = False
-                        username = None
-                        password = None
-                        for i, line in enumerate(lines):
-                            if line.strip().startswith("machine urs.earthdata.nasa.gov"):
-                                machine_found = True
-                            elif machine_found and line.strip().startswith("login"):
-                                username = line.strip().split()[1]
-                            elif machine_found and line.strip().startswith("password"):
-                                password = line.strip().split()[1]
-                                if username and password:
-                                    print(f"\n✓ Found NASA Earthdata credentials (username: {username})")
-                                    # Store in environment for this session
-                                    os.environ['EARTHDATA_USER'] = username
-                                    os.environ['EARTHDATA_PASS'] = password
-                                    return (username, password)
-                except Exception:
-                    pass
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-    # Prompt user for credentials
-    print("\n" + "=" * 70)
-    print("NASA Earthdata Login Required")
-    print("=" * 70)
-    print("\nSRTM and NED datasets require a free NASA Earthdata account.")
-    print("\nIf you don't have an account, register at:")
-    print("  https://urs.earthdata.nasa.gov/users/new")
-    print("\nIMPORTANT: After creating your account, you must approve these applications:")
-    print("  1. Log in to https://urs.earthdata.nasa.gov/")
-    print("  2. Go to 'Applications > Authorized Apps' and approve:")
-    print("     - NASA GESDISC DATA ARCHIVE")
-    print("     - LP DAAC Data Pool")
-    print("\nYour credentials will be stored in a .netrc file for authentication.")
-    print("=" * 70)
-
-    response = input("\nDo you have NASA Earthdata credentials? [y/N]: ").strip().lower()
-    if response != 'y':
-        print("\nSkipping automated download. You can download manually later.")
-        return None
-
-    username = input("NASA Earthdata username: ").strip()
-    password = getpass.getpass("NASA Earthdata password: ")
-
-    if username and password:
-        # Store in environment for this session
-        os.environ['EARTHDATA_USER'] = username
-        os.environ['EARTHDATA_PASS'] = password
-        print("✓ Credentials stored in environment variables for this session")
-
-        # Ask if user wants to save credentials to .netrc inside container
-        print("\nWould you like to save these credentials for future use?")
-        print("Credentials will be stored in a .netrc file inside the climb-analyzer container.")
-        save_creds = input("Save credentials? [Y/n]: ").strip().lower()
-
-        if save_creds in ['', 'y', 'yes']:
-            # Import and use the setup_earthdata_netrc function
-            try:
-                from .dem_downloaders import setup_earthdata_netrc
-                setup_earthdata_netrc(username, password)
-                print("✓ Credentials will be available for future elevation downloads")
-            except Exception as e:
-                print(f"⚠️  Could not save credentials: {e}")
-                print("   You'll need to enter them again next time")
-
-        return (username, password)
-
     return None
 
 
@@ -343,19 +238,8 @@ def download_dem_for_region(
     print("\n   DEM download can take 30 minutes to several hours")
     print("  depending on region size and number of datasets.\n")
 
-    # Check which credentials are needed
-    needs_earthdata = any(ds.lower() in ["srtm", "srtm30m", "ned10m"] for ds in datasets)
-
-    earthdata_creds = None
-
-    # Prompt for credentials before starting downloads
-    if needs_earthdata:
-        earthdata_creds = get_earthdata_credentials()
-        if not earthdata_creds:
-            print("\n⚠️  Skipping SRTM and NED downloads (no credentials provided)")
-            datasets = [d for d in datasets if d.lower() not in ["srtm", "srtm30m", "ned10m"]]
-
-    # Note: AW3D30 no longer requires credentials (uses public FTP server)
+    # Note: All elevation datasets now use public sources (December 2025)
+    # No credentials required for SRTM, NED, or AW3D30
 
     if not datasets:
         print("\n⚠️  No datasets to download")
@@ -397,12 +281,13 @@ def download_dem_for_region(
             dir_path.mkdir(parents=True, exist_ok=True)
 
         # Initialize downloaders with their specific subdirectories
+        # Note: All datasets use public sources - no credentials needed
         downloaders = {
-            "aw3d30": AW3D30Downloader(aw3d30_dir),  # No credentials needed - uses public FTP
+            "aw3d30": AW3D30Downloader(aw3d30_dir),
             "rema": REMADownloader(rema_dir),
             "arcticdem": ArcticDEMDownloader(arcticdem_dir),
-            "srtm": SRTMDownloader(srtm_dir, credentials=earthdata_creds),
-            "srtm30m": SRTMDownloader(srtm_dir, credentials=earthdata_creds),  # Alias
+            "srtm": SRTMDownloader(srtm_dir),
+            "srtm30m": SRTMDownloader(srtm_dir),
             "ned10m": NEDDownloader(ned10m_dir)
         }
 
@@ -696,23 +581,13 @@ def setup_data_for_region(
 
     # Step 3: Download DEM data
     if not skip_dem:
-        # Check which credentials are needed
-        needs_earthdata = any(ds.lower() in ["srtm", "srtm30m", "ned10m"] for ds in datasets)
-
-        credentials = {}
-        if needs_earthdata:
-            earthdata_creds = get_earthdata_credentials()
-            if earthdata_creds:
-                credentials['earthdata'] = earthdata_creds
-            else:
-                print("\n⚠️  Skipping SRTM and NED downloads (no credentials provided)")
-                datasets = [d for d in datasets if d.lower() not in ["srtm", "srtm30m", "ned10m"]]
-
+        # Note: All elevation datasets now use public sources (December 2025)
+        # No credentials required for SRTM, NED, or AW3D30
         success, new_files = data_mgr.download_elevation_data(
             region_name,
             (lat_min, lon_min, lat_max, lon_max),
             datasets,
-            credentials
+            credentials=None
         )
         if not success:
             print("\n❌ DEM download failed")

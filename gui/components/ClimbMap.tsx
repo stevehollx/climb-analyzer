@@ -870,15 +870,14 @@ export function ClimbMap({ climbs, allClimbs, bounds, showAllRoutes = false, sco
     console.log('  Cached geojson:', geojson ? 'YES' : 'NO');
 
     if (!geojson) {
-      // Fetch from Overpass API
+      // Fetch from our API route (proxies to Overpass API to avoid CORS issues)
       try {
-        const query = `[out:json];way(${wayId});out geom;`;
-        const response = await fetch(`https://overpass-api.de/api/interpreter`, {
+        const response = await fetch('/api/overpass', {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
+            'Content-Type': 'application/json',
           },
-          body: `data=${encodeURIComponent(query)}`
+          body: JSON.stringify({ wayIds: [wayId] })
         });
 
         if (!response.ok) {
@@ -886,30 +885,19 @@ export function ClimbMap({ climbs, allClimbs, bounds, showAllRoutes = false, sco
           return;
         }
 
-        const contentType = response.headers.get('content-type');
-        if (!contentType || !contentType.includes('application/json')) {
-          const text = await response.text();
-          console.error(`Expected JSON but got ${contentType} for way ${wayId}:`, text.substring(0, 200));
-          return;
-        }
-
         const data = await response.json();
 
-        if (data.elements && data.elements.length > 0) {
-          const way = data.elements[0];
-          if (way.geometry && way.geometry.length > 0) {
-            const coordinates = way.geometry.map((node: any) => [node.lon, node.lat]);
-            geojson = {
-              type: 'Feature' as const,
-              properties: {},
-              geometry: {
-                type: 'LineString' as const,
-                coordinates: coordinates,
-              },
-            };
-            // Cache it
-            routeDataCache.current.set(wayId, geojson);
-          }
+        if (data.coordinates && data.coordinates.length > 0) {
+          geojson = {
+            type: 'Feature' as const,
+            properties: {},
+            geometry: {
+              type: 'LineString' as const,
+              coordinates: data.coordinates,
+            },
+          };
+          // Cache it
+          routeDataCache.current.set(wayId, geojson);
         }
       } catch (error) {
         console.error(`Failed to fetch route geometry for way ${wayId}:`, error);

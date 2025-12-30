@@ -2311,6 +2311,7 @@ DATASET_PRIORITY_BY_REGION_CLOUD = {
     "Colorado": ["ned10m", "srtm30m"],
     "Connecticut": ["ned10m", "srtm30m"],
     "Delaware": ["ned10m", "srtm30m"],
+    "District Of Columbia": ["ned10m", "srtm30m"],
     "Florida": ["ned10m", "srtm30m"],
     "Georgia": ["ned10m", "srtm30m"],
     "Hawaii": ["ned10m", "srtm30m"],
@@ -2341,11 +2342,13 @@ DATASET_PRIORITY_BY_REGION_CLOUD = {
     "Oklahoma": ["ned10m", "srtm30m"],
     "Oregon": ["ned10m", "srtm30m"],
     "Pennsylvania": ["ned10m", "srtm30m"],
+    "Puerto Rico": ["ned10m", "srtm30m"],
     "Rhode Island": ["ned10m", "srtm30m"],
     "South Carolina": ["ned10m", "srtm30m"],
     "South Dakota": ["ned10m", "srtm30m"],
     "Tennessee": ["ned10m", "srtm30m"],
     "Texas": ["ned10m", "srtm30m"],
+    "Us Virgin Islands": ["ned10m", "srtm30m"],
     "Utah": ["ned10m", "srtm30m"],
     "Vermont": ["ned10m", "srtm30m"],
     "Virginia": ["ned10m", "srtm30m"],
@@ -2389,6 +2392,7 @@ DATASET_PRIORITY_BY_REGION = {
     "Colorado": ["ned10m", "srtm30m"],
     "Connecticut": ["ned10m", "srtm30m"],
     "Delaware": ["ned10m", "srtm30m"],
+    "District Of Columbia": ["ned10m", "srtm30m"],
     "Florida": ["ned10m", "srtm30m"],
     "Georgia": ["ned10m", "srtm30m"],
     "Hawaii": ["ned10m", "srtm30m"],
@@ -2419,11 +2423,13 @@ DATASET_PRIORITY_BY_REGION = {
     "Oklahoma": ["ned10m", "srtm30m"],
     "Oregon": ["ned10m", "srtm30m"],
     "Pennsylvania": ["ned10m", "srtm30m"],
+    "Puerto Rico": ["ned10m", "srtm30m"],
     "Rhode Island": ["ned10m", "srtm30m"],
     "South Carolina": ["ned10m", "srtm30m"],
     "South Dakota": ["ned10m", "srtm30m"],
     "Tennessee": ["ned10m", "srtm30m"],
     "Texas": ["ned10m", "srtm30m"],
+    "Us Virgin Islands": ["ned10m", "srtm30m"],
     "Utah": ["ned10m", "srtm30m"],
     "Vermont": ["ned10m", "srtm30m"],
     "Virginia": ["ned10m", "srtm30m"],
@@ -2598,6 +2604,9 @@ class FastElevationFetcher:
 
         # Track datasets that returned 404 (not available) - skip these for entire session
         self.unavailable_datasets = set()
+
+        # Track datasets that actually returned valid elevation data
+        self.datasets_used = set()
 
         # Track if we've attempted config sync after "not in config" error (only try once)
         self._config_sync_attempted = False
@@ -3011,6 +3020,14 @@ class FastElevationFetcher:
         """
         return [ds for ds in self.dataset_cascade if ds not in self.unavailable_datasets]
 
+    def get_datasets_used(self) -> List[str]:
+        """Get list of datasets that actually returned elevation data.
+
+        Returns:
+            Sorted list of dataset names that returned valid elevation data
+        """
+        return sorted(self.datasets_used)
+
     def _fetch_single_batch(
         self,
         coordinates: List[Tuple[float, float]],
@@ -3040,6 +3057,9 @@ class FastElevationFetcher:
             if result is not None:
                 valid_count = sum(1 for e in result if e is not None)
                 if valid_count > 0:
+                    # Track all datasets in cascade (server tried them all)
+                    for ds in self.dataset_cascade:
+                        self.datasets_used.add(ds)
                     # DEBUG: Log success
                     logger.info(
                         f"[MULTI-DS] SUCCESS: Got {valid_count}/{len(coordinates)} elevations from multi-dataset query"
@@ -3075,6 +3095,8 @@ class FastElevationFetcher:
         if result is not None:
             valid_count = sum(1 for e in result if e is not None)
             if valid_count > 0:
+                # Track the primary dataset that returned data
+                self.datasets_used.add(self.primary_dataset)
                 return result
 
         # Try fallback endpoints for coordinates with missing data
@@ -3084,6 +3106,13 @@ class FastElevationFetcher:
             )
 
             if fallback_result is not None:
+                # Track this fallback dataset if it returned any valid data
+                fallback_valid = sum(1 for e in fallback_result if e is not None)
+                if fallback_valid > 0:
+                    # Extract dataset name from URL
+                    fallback_dataset = fallback_url.split("/v1/")[-1].split("?")[0]
+                    self.datasets_used.add(fallback_dataset)
+
                 # Combine results - use fallback data where primary failed
                 if result is None:
                     result = fallback_result
@@ -9529,7 +9558,7 @@ def convert_ways_to_segments_batched(
 
                         sys.exit(0)
 
-    print(f"  ✓ Converted {segment_count:,} ways to segment format (checkpoint)")
+    print(f"\n  ✓ Converted {segment_count:,} ways to segment format (checkpoint)")
     return segments_checkpoint
 
 
@@ -10031,7 +10060,7 @@ def merge_segments_streaming(persistence, segments_checkpoint: Path, signal_hand
                         f_out.write(json.dumps(seg) + "\n")
                         merged_count += 1
 
-    print(f"    ✓ Merged {total_processed:,} segments → {merged_count:,} road segments")
+    print(f"\n    ✓ Merged {total_processed:,} segments → {merged_count:,} road segments")
     print(f"    ✓ Merged {streets_with_multiple:,} streets with multiple ways")
     if streets_skipped_too_large > 0:
         print(
@@ -11066,6 +11095,11 @@ def process_region_without_chunking(
         # Update successful datasets in error logger (will be written when stopped)
         successful_datasets = elevation_fetcher.get_successful_datasets()
         error_logger.set_successful_datasets(successful_datasets)
+
+        # Save datasets that actually returned elevation data (for PR body in cloud cache)
+        datasets_used = elevation_fetcher.get_datasets_used()
+        if datasets_used:
+            persistence.save_datasets_used(datasets_used)
 
         # DON'T clear elevation progress - keep it for resume functionality
         # The elevation_data.db file persists in checkpoints folder
@@ -17701,23 +17735,23 @@ def delete_region_data(region_name: str, delete_checkpoints=True, delete_osm=Tru
     elevation_deleted = False
 
     if delete_checkpoints:
-        # Delete checkpoint directories matching this region
-        deleted_count = 0
-        for checkpoint_dir in CHECKPOINT_DIR.glob(f"{region_name}_*"):
-            try:
-                shutil.rmtree(checkpoint_dir)
-                deleted_count += 1
-            except OSError as e:
-                print(f"   ⚠️  Could not delete {checkpoint_dir.name}: {e}")
+        # Sanitize region name the same way as analysis_id generation (line 11839)
+        # "North Dakota" -> "NorthDakota" (removes spaces, keeps alphanumeric)
+        sanitized = "".join(c for c in region_name if c.isalnum() or c in ("_", "-"))
 
-        # Also try with normalized name
-        for checkpoint_dir in CHECKPOINT_DIR.glob(f"{normalized}_*"):
-            if checkpoint_dir.exists():  # May have been deleted above
-                try:
-                    shutil.rmtree(checkpoint_dir)
-                    deleted_count += 1
-                except OSError:
-                    pass
+        deleted_count = 0
+        seen_dirs = set()
+
+        # Try multiple patterns to catch all variations
+        for pattern in [f"{sanitized}_*", f"{sanitized.lower()}_*", f"{region_name}_*", f"{normalized}_*"]:
+            for checkpoint_dir in CHECKPOINT_DIR.glob(pattern):
+                if checkpoint_dir.exists() and checkpoint_dir not in seen_dirs:
+                    seen_dirs.add(checkpoint_dir)
+                    try:
+                        shutil.rmtree(checkpoint_dir)
+                        deleted_count += 1
+                    except OSError as e:
+                        print(f"   ⚠️  Could not delete {checkpoint_dir.name}: {e}")
 
         if deleted_count > 0:
             print(f"✓ Deleted {deleted_count} checkpoint directory(s)")
@@ -18118,12 +18152,7 @@ def main():
         help="Delete checkpoints + OSM + elevation for THIS region after successful analysis (use with -r)",
     )
 
-    data_group.add_argument(
-        "-K",
-        "--keep-checkpoints",
-        action="store_true",
-        help="Keep checkpoint files after analysis (default for batch/region mode)",
-    )
+    # Note: Checkpoints are KEPT by default after analysis. No -K flag needed.
 
     data_group.add_argument(
         "--ignore-checkpoints",
@@ -20440,10 +20469,20 @@ def main():
                         # This avoids pattern-matching issues with hierarchical region names
                         if 'created_files' in dir() and created_files:
                             output_files = {"xlsx": [f for f in created_files if str(f).endswith('.xlsx')], "csv": None}
-                            # Also look for error file
-                            for f in created_files:
-                                if '_errors_' in str(f) and str(f).endswith('.txt'):
-                                    output_files["csv"] = f
+
+                            # Search for error log file in output directory
+                            # Error files use different naming patterns, so search broadly
+                            error_patterns = [
+                                f"*{safe_name}*_errors_*.txt",
+                                f"*{safe_name.lower().replace(' ', '_')}*_errors_*.txt",
+                                f"*{safe_name.lower().replace(' ', '-')}*_errors_*.txt",
+                                f"us__*_errors_{filter_str}_{date_str}.txt",
+                            ]
+                            for pattern in error_patterns:
+                                matches = list(output_dir.glob(pattern))
+                                if matches:
+                                    # Use most recent error file
+                                    output_files["csv"] = max(matches, key=lambda p: p.stat().st_mtime)
                                     break
                         else:
                             # Fallback to pattern search
@@ -20469,8 +20508,14 @@ def main():
 
                                 print_header("Uploading to Cloud Cache", spacing_before=2)
                                 print_info("Creating pull request with your analysis...", indent=0)
+
+                                # Load datasets_used from persistence if available
+                                datasets_used = None
+                                if persistence:
+                                    datasets_used = persistence.load_datasets_used()
+
                                 pr_url = cloud_cache.upload_to_staging(
-                                    country_name, region_name, output_files, scope_type
+                                    country_name, region_name, output_files, scope_type, datasets_used
                                 )
 
                                 if pr_url:

@@ -26,7 +26,7 @@ services:
       - ./output:/app/output
       # Mount checkpoints directory to host (so progress is saved)
       - ./data/checkpoint_data:/app/data/checkpoint_data
-      # Mount credentials directory to persist NASA Earthdata login
+      # Mount credentials directory (kept for backward compatibility)
       - ./.credentials:/app/.credentials
       # Mount config (create if not exists)
       - ./config.yaml:/app/config.yaml
@@ -39,9 +39,10 @@ services:
       - PYTHONUNBUFFERED=1
       # Prevent Python from writing .pyc files (ensures fresh code on every run)
       - PYTHONDONTWRITEBYTECODE=1
-      # Pass through NASA Earthdata credentials from host (via .env file or shell export)
-      - EARTHDATA_USER=${EARTHDATA_USER:-}
-      - EARTHDATA_PASS=${EARTHDATA_PASS:-}
+      # DEPRECATED: NASA Earthdata credentials no longer needed (December 2025)
+      # All elevation datasets now use public sources
+      # - EARTHDATA_USER=${EARTHDATA_USER:-}
+      # - EARTHDATA_PASS=${EARTHDATA_PASS:-}
       # Host project directory for Docker-in-Docker operations
       - HOST_PROJECT_DIR=${PWD}
       # Host user/group IDs for fixing file ownership

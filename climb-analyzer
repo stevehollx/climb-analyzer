@@ -65,7 +65,7 @@ check_docker() {
     fi
 }
 
-# Function to detect docker compose command
+# Function to detect docker compose command (returns array-style command)
 get_compose_cmd() {
     if docker compose version >/dev/null 2>&1; then
         echo "docker compose"
@@ -75,6 +75,15 @@ get_compose_cmd() {
         print_error "Docker Compose not found"
         echo "Please install Docker Compose and try again"
         exit 1
+    fi
+}
+
+# Run docker compose command with proper argument handling
+run_compose() {
+    if docker compose version >/dev/null 2>&1; then
+        docker compose "$@"
+    else
+        docker-compose "$@"
     fi
 }
 
@@ -117,29 +126,30 @@ CLI Analysis (pass any climb_analyzer.py arguments):
 Data Management:
   -U, --update-geo-boundaries     Update geographic boundaries
   -D, --data-download             Download data without analysis
-  -C, --delete-checkpoints        Delete checkpoints
-  -P, --delete-planet-data        Delete OSM data
-  -E, --delete-elevation-data     Delete elevation data
-  -A, --delete-all-data           Delete all data
-  -X, --delete-data-on-complete   Cleanup after analysis
+  -c, --cleanup-checkpoints       Delete checkpoints for this region after analysis (use with -r)
+  -Z, --cleanup-all-data          Delete all data for this region after analysis (use with -r)
+      --ignore-checkpoints        Start fresh analysis, ignore existing checkpoints
+      --no-cloud-upload           Skip uploading to cloud cache
+  Note: Checkpoints are KEPT by default for potential resume.
+
+Cleanup Subcommand (global deletion):
+  cleanup --checkpoints           Delete ALL checkpoint files
+  cleanup --elevation             Delete ALL elevation data
+  cleanup --osm                   Delete ALL OSM data and indexes
+  cleanup --all                   Delete ALL data
 
 Examples:
   ./climb-analyzer                           # Run interactively
   ./climb-analyzer -g                        # Launch web GUI (background)
   ./climb-analyzer --stop-gui                # Stop GUI server
   ./climb-analyzer --restart-gui             # Restart GUI server
-  ./climb-analyzer -a "Boulder, CO" --radius 25
+  ./climb-analyzer -a "Boulder, CO" --distance 25
   ./climb-analyzer -r Colorado -s paved
-  ./climb-analyzer -r "VT,NH,ME" -X          # Batch with cleanup
+  ./climb-analyzer -r "VT,NH,ME" -Z          # Batch with cleanup after each region
   ./climb-analyzer -D -r Vermont             # Download data only
   ./climb-analyzer -U                        # Update boundaries
-  ./climb-analyzer -A                        # Delete all data
-  ./climb-analyzer --merge-climbs output/France_climbs.xlsx  # Merge split climbs (single file)
-  ./climb-analyzer -M output/California_climbs.xlsx  # Merge (short form)
-  ./climb-analyzer --merge-splits output/North_Carolina_*-*.xlsx  # Merge across multiple files
-  ./climb-analyzer -S output/Region_climbs_*.xlsx  # Merge splits (short form)
-  ./climb-analyzer --merge-regions "output/state_*.xlsx"  # Merge adjacent region files (batch)
-  ./climb-analyzer -X "output/Idaho*.xlsx" "output/Oregon*.xlsx"  # Cross-region merge (short form)
+  ./climb-analyzer cleanup --all             # Delete all data globally
+  ./climb-analyzer --merge-regions "output/state_*.xlsx"  # Merge cross-region climbs
   ./climb-analyzer --list-regions            # Show all available regions
   ./climb-analyzer --help-extended           # Extended help
   ./climb-analyzer setup                     # Run setup wizard
@@ -381,7 +391,7 @@ case "${1:-run}" in
         # Special case: if launching GUI, need to expose ports and run detached
         if [[ "$1" == "-g" ]] || [[ "$1" == "--gui" ]]; then
             print_info "Starting GUI server in background..."
-            CONTAINER_ID=$($COMPOSE_CMD run -d --rm --service-ports climb-analyzer python climb_analyzer_main.py "$@")
+            CONTAINER_ID=$(run_compose run -d --rm --service-ports climb-analyzer python climb_analyzer_main.py "$@")
             if [ $? -eq 0 ]; then
                 print_success "GUI server started successfully!"
                 print_info "Container ID: ${CONTAINER_ID:0:12}"
@@ -394,7 +404,8 @@ case "${1:-run}" in
                 exit 1
             fi
         else
-            exec $COMPOSE_CMD run --rm climb-analyzer python climb_analyzer_main.py "$@"
+            # Use run_compose function to properly handle arguments with spaces
+            run_compose run --rm climb-analyzer python climb_analyzer_main.py "$@"
         fi
         ;;
 

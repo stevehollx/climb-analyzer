@@ -40,8 +40,8 @@ def get_required_datasets(
     """
     datasets = []
 
-    # Antarctica (< -60°S)
-    if lat_max < -60:
+    # Antarctica (<= -60°S)
+    if lat_max <= -60:
         if deployment_type == 'local':
             datasets.append('rema32m')
             return datasets  # REMA is sufficient for Antarctica in local mode
@@ -71,11 +71,13 @@ def get_required_datasets(
         datasets.append('srtm30m')
         return datasets
 
-    # Alaska
+    # Alaska - US region with Arctic coverage
     if is_alaska:
         if deployment_type == 'local':
-            datasets.append('arctic32m')
-            datasets.append('aw3d30')
+            datasets.append('ned10m')      # US high-res (complete AK coverage)
+            datasets.append('arctic32m')   # Arctic coverage (>60°N)
+            datasets.append('srtm30m')     # Mid-latitude backup (<60°N)
+            # No aw3d30 - NED covers all US at higher resolution
         else:
             # Cloud mode: SRTM for parts within coverage
             datasets.append('srtm30m')

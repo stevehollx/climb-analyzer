@@ -116,15 +116,6 @@ Filter climbs by minimum score:
 ./climb-analyzer -r "Vermont" -m 10000  # Only climbs scoring 10000+
 ```
 
-### Geocoding (`-g`)
-
-Enable/disable reverse geocoding (city/state lookup):
-
-```bash
-./climb-analyzer -r "Vermont" -g yes  # Enable (default)
-./climb-analyzer -r "Vermont" -g no   # Disable (faster)
-```
-
 ## Data Management
 
 ### Download Data (`-D`)
@@ -146,20 +137,16 @@ Update geographic boundary data:
 
 ### Checkpoint Management
 
-Control checkpoint behavior:
+Checkpoints are **kept by default** after analysis for potential resume. Control behavior:
 
 ```bash
-# Keep checkpoints after analysis (default for batch/region mode)
-./climb-analyzer -r "Vermont" -K
-./climb-analyzer -r "Vermont" --keep-checkpoints
-
 # Ignore existing checkpoints - start fresh
 ./climb-analyzer -r "Vermont" --ignore-checkpoints
 ```
 
 | Option | Description |
 |--------|-------------|
-| `-K`, `--keep-checkpoints` | Keep checkpoint files after analysis |
+| (default) | Keep checkpoint files after analysis |
 | `--ignore-checkpoints` | Ignore existing checkpoints, start fresh |
 
 ### Per-Region Cleanup (Post-Analysis)
@@ -360,11 +347,12 @@ Merge climbs from existing Excel files:
 |------|-----------|-------------|---------|
 | `-U` | `--update-geo-boundaries` | Update boundaries | - |
 | `-D` | `--data-download` | Download data only | - |
-| `-K` | `--keep-checkpoints` | Keep checkpoint files | yes (batch) |
 | - | `--ignore-checkpoints` | Ignore existing checkpoints | - |
 | - | `--no-cloud-upload` | Skip cloud cache upload | - |
 | `-c` | `--cleanup-checkpoints` | Delete checkpoints for THIS region after analysis | - |
 | `-Z` | `--cleanup-all-data` | Delete all data for THIS region after analysis | - |
+
+> **Note:** Checkpoints are kept by default after analysis. No flag needed to preserve them.
 
 ### Cleanup Subcommand
 

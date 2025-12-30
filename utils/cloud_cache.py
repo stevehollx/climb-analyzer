@@ -168,6 +168,51 @@ class CloudCacheManager:
         except Exception:
             return []
 
+    def load_datasets_used_from_checkpoint(self, region_name: str) -> List[str]:
+        """
+        Load datasets_used from the most recent analysis checkpoint folder.
+
+        Args:
+            region_name: Name of the region to search for
+
+        Returns:
+            List of dataset names that were actually used, or empty list if not found
+        """
+        import json
+
+        checkpoint_base = Path("data/checkpoint_data")
+        if not checkpoint_base.exists():
+            return []
+
+        # Normalize region name for matching
+        normalized = region_name.lower().replace(" ", "_").replace("-", "_")
+
+        # Find matching checkpoint folders (sorted by modification time, newest first)
+        matching_dirs = []
+        for d in checkpoint_base.iterdir():
+            if d.is_dir():
+                dir_name_normalized = d.name.lower().replace("-", "_")
+                if normalized in dir_name_normalized:
+                    matching_dirs.append(d)
+
+        if not matching_dirs:
+            return []
+
+        # Sort by modification time (most recent first)
+        matching_dirs.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+
+        # Check each for datasets_used.json
+        for analysis_dir in matching_dirs:
+            datasets_file = analysis_dir / "datasets_used.json"
+            if datasets_file.exists():
+                try:
+                    with open(datasets_file) as f:
+                        return json.load(f)
+                except Exception:
+                    continue
+
+        return []
+
     def get_country_continent(self, country_name: str) -> Optional[str]:
         """
         Get continent name for a country.
@@ -783,7 +828,12 @@ class CloudCacheManager:
                 )
 
     def upload_to_staging(
-        self, country: str, region: Optional[str], local_files: Dict, scope_type: str
+        self,
+        country: str,
+        region: Optional[str],
+        local_files: Dict,
+        scope_type: str,
+        datasets_used: Optional[List[str]] = None,
     ) -> Optional[str]:
         """
         Upload analysis files to staging branch and create pull request.
@@ -793,6 +843,7 @@ class CloudCacheManager:
             region: Region/state name (for USA states)
             local_files: Dict with 'xlsx' (list of paths) and 'csv' (path to error log txt, or None)
             scope_type: Type of analysis
+            datasets_used: List of elevation datasets that were actually used during analysis
 
         Returns:
             PR URL if successful, None otherwise
@@ -861,13 +912,15 @@ class CloudCacheManager:
             f"\n  Uploading {len(all_files_to_upload)} file(s) ({total_size_mb:.1f} MB total) via git push with LFS..."
         )
 
-        # Build commit message with dataset info
-        datasets = self.get_elevation_datasets()
-        dataset_str = ", ".join(datasets) if datasets else "unknown"
-        commit_message = (
-            f"{'Update' if is_update else 'Add'} {location_name} climb analysis\n\n"
-            f"Elevation datasets: {dataset_str}"
-        )
+        # Get app version for commit message
+        try:
+            from __version__ import __version__ as app_version
+        except ImportError:
+            app_version = "unknown"
+
+        # Build commit message with version and date
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        commit_message = f"{'Update' if is_update else 'Add'} {location_name} climb analysis (v{app_version}, {date_str})"
 
         # Upload using git push with LFS support
         if not self.github.upload_files_via_git(
@@ -922,6 +975,16 @@ class CloudCacheManager:
 - Score Type: basic
 - Cycling Filter: off
 """
+
+        # Add elevation datasets section if available
+        # Try loading from checkpoint if not provided
+        if not datasets_used:
+            datasets_used = self.load_datasets_used_from_checkpoint(location_name)
+
+        if datasets_used:
+            pr_body += "\n**Elevation Datasets Used (priority order):**\n"
+            for i, ds in enumerate(datasets_used, 1):
+                pr_body += f"{i}. {ds}\n"
 
         # Add comparison info if updating existing analysis
         if is_update and cache_info["xlsx_files"]:

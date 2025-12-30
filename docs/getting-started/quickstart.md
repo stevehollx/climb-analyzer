@@ -175,16 +175,16 @@ The GUI provides:
 
 ```bash
 # Delete all checkpoints
-./climb-analyzer -C
+./climb-analyzer cleanup --checkpoints
 
 # Delete all OSM data
-./climb-analyzer -P
+./climb-analyzer cleanup --osm
 
 # Delete all elevation data
-./climb-analyzer -E
+./climb-analyzer cleanup --elevation
 
 # Delete everything
-./climb-analyzer -A
+./climb-analyzer cleanup --all
 ```
 
 ## Tips for First-Time Users

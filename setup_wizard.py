@@ -1132,9 +1132,9 @@ def print_next_steps():
     print("6. Data management:")
     print("   ./climb-analyzer -D -r Vermont  # Download data only")
     print("   ./climb-analyzer -U              # Update boundaries")
-    print("   ./climb-analyzer -P              # Delete planet/OSM data")
-    print("   ./climb-analyzer -E              # Delete elevation data")
-    print("   ./climb-analyzer -A              # Delete all data\n")
+    print("   ./climb-analyzer cleanup --osm        # Delete OSM data")
+    print("   ./climb-analyzer cleanup --elevation  # Delete elevation data")
+    print("   ./climb-analyzer cleanup --all        # Delete all data\n")
 
     print("7. Useful options:")
     print("   --list-regions                   # List available regions")
@@ -1356,38 +1356,22 @@ def main():
     # No need to re-read; trust the wizard's return value
     print(f"\nDetected deployment mode: {deployment_mode.upper()}\n")
 
-    # Check if climb-analyzer container exists - if not, build it
-    needs_build = True
-    try:
-        result = subprocess.run(
-            ["docker", "images", "-q", "climb-analyzer"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.stdout.strip():
-            print_success("climb-analyzer container already exists\n", indent=0)
-            needs_build = False
-    except Exception:
-        pass
+    # Build Docker images - function handles both new build and rebuild prompts
+    if not build_docker_images(deployment_mode):
+        print("\n⚠️  Docker images not built")
+        if deployment_mode == "cloud":
+            print("You can build them later with: docker compose build climb-analyzer")
+        else:
+            print("You can build them later with: docker compose build")
+        print("Then run: docker compose run --rm climb-analyzer python data_setup.py")
+        sys.exit(1)
 
-    # Build Docker images if needed
-    if needs_build:
-        if not build_docker_images(deployment_mode):
-            print("\n⚠️  Docker images not built")
-            if deployment_mode == "cloud":
-                print("You can build them later with: docker compose build climb-analyzer")
-            else:
-                print("You can build them later with: docker compose build")
-            print("Then run: docker compose run --rm climb-analyzer python data_setup.py")
+    # Verify container after build
+    if deployment_mode == "local":
+        if not verify_docker_setup():
+            print("\n⚠️  Container verification had issues")
+            print("You may need to rebuild: docker-compose build")
             sys.exit(1)
-
-        # Verify container after build
-        if deployment_mode == "local":
-            if not verify_docker_setup():
-                print("\n⚠️  Container verification had issues")
-                print("You may need to rebuild: docker-compose build")
-                sys.exit(1)
 
     # Deployment-specific setup
     if mode_ok:

@@ -72,8 +72,23 @@ def find_fuzzy_matches(region_name: str, interactive: bool = True) -> Optional[T
     # Get list of searchable names
     searchable_names = [r[2] for r in all_regions]
 
+    # First, check for "starts with" matches (handles "north" -> "north dakota", etc.)
+    # This catches cases where arguments with spaces are split by shell/docker
+    starts_with_matches = [s for s in searchable_names if s.startswith(region_lower + " ")]
+    if starts_with_matches:
+        # Prioritize US states over other matches
+        us_state_matches = [s for s in starts_with_matches if any(
+            r[0] == "state" and r[2] == s for r in all_regions
+        )]
+        if us_state_matches:
+            starts_with_matches = us_state_matches + [s for s in starts_with_matches if s not in us_state_matches]
+
     # Find close matches (cutoff of 0.6 means 60% similarity)
-    matches = get_close_matches(region_lower, searchable_names, n=5, cutoff=0.6)
+    fuzzy_matches = get_close_matches(region_lower, searchable_names, n=5, cutoff=0.6)
+
+    # Combine: starts_with matches first, then fuzzy matches
+    matches = starts_with_matches + [m for m in fuzzy_matches if m not in starts_with_matches]
+    matches = matches[:5]  # Limit to top 5
 
     if not matches:
         return None

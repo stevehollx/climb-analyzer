@@ -177,7 +177,7 @@ steep_paved = df[(df['Surface'] == 'paved') & (df['Avg Grade (%)'] > 5)]
 ### Completeness
 
 - **Street Name**: May be "Unnamed" for trails without names
-- **City/State**: Requires geocoding enabled (`-g yes`)
+- **City/State**: Populated via reverse geocoding (automatic)
 - **Surface**: From OSM tags; may be "unknown"
 
 ### Accuracy

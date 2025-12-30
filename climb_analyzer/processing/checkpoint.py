@@ -351,6 +351,36 @@ class ChunkPersistenceManager:
         elevation_complete_file = self.analysis_dir / "elevation_complete.pkl"
         return elevation_complete_file.exists()
 
+    def save_datasets_used(self, datasets: List[str]) -> None:
+        """
+        Save list of elevation datasets that were actually used during analysis.
+
+        Args:
+            datasets: List of dataset names (e.g., ['ned10m', 'srtm30m'])
+        """
+        datasets_file = self.analysis_dir / "datasets_used.json"
+        try:
+            with open(datasets_file, 'w') as f:
+                json.dump(datasets, f)
+        except Exception as e:
+            print(f"Warning: Could not save datasets_used: {e}")
+
+    def load_datasets_used(self) -> List[str]:
+        """
+        Load list of elevation datasets that were used during analysis.
+
+        Returns:
+            List of dataset names, or empty list if not found
+        """
+        datasets_file = self.analysis_dir / "datasets_used.json"
+        if datasets_file.exists():
+            try:
+                with open(datasets_file) as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"Warning: Could not load datasets_used: {e}")
+        return []
+
     def load_progress(self) -> Tuple[List[int], int, Dict]:
         """
         Load progress and metadata from disk.

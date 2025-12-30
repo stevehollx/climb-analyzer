@@ -15,7 +15,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from climb_analyzer.data.manager import DataManager, get_credentials_from_env, prompt_for_credentials
+from climb_analyzer.data.manager import DataManager
 from elevation_dataset_selector import get_elevation_datasets_for_region, explain_dataset_selection
 from climb_analyzer.data.geo_lookup import find_region, get_region_bounds, is_us_state
 from utils.geographic_menu import select_countries, select_us_states
@@ -27,16 +27,14 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Available Datasets:
-  ned10m      - NED 10m (US only, requires Earthdata credentials)
-  srtm        - SRTM 30m (global 60°N-56°S, requires Earthdata credentials)
-  aster       - ASTER GDEM 30m (global, requires Earthdata credentials)
-  aw3d30      - AW3D30 30m (global, public FTP access)
-  arcticdem   - ArcticDEM 32m (Arctic regions)
-  rema        - REMA 32m (Antarctica)
+  ned10m      - NED 10m (US only, AWS S3 public)
+  srtm        - SRTM 30m (global 60°N-56°S, OpenTopography S3 public)
+  aster       - ASTER GDEM 30m (DEPRECATED - data source retired Dec 2025)
+  aw3d30      - AW3D30 30m (global, JAXA FTP public)
+  arcticdem   - ArcticDEM 32m (Arctic regions, AWS S3 public)
+  rema        - REMA 32m (Antarctica, AWS S3 public)
 
-Credentials:
-  Set environment variables to avoid prompts:
-    EARTHDATA_USER, EARTHDATA_PASS  - For NED, SRTM, ASTER
+Note: All datasets now use public sources - no credentials required.
 
 Examples:
   # Interactive mode - auto-selects datasets based on region
@@ -207,16 +205,7 @@ Examples:
         explain_dataset_selection(datasets, args.deployment_mode)
         print()
 
-    # Get credentials
-    print("\nChecking credentials...")
-    credentials = get_credentials_from_env()
-
-    # Prompt for missing credentials if needed
-    if datasets:
-        missing_creds = prompt_for_credentials(datasets)
-        credentials.update(missing_creds)
-
-    # Download elevation data
+    # Download elevation data (no credentials needed - all sources are public)
     print(f"\n{'='*80}")
     print(f"  Downloading Elevation Data")
     print(f"{'='*80}\n")
@@ -225,7 +214,7 @@ Examples:
         region_name,
         bounds,
         datasets,
-        credentials=credentials
+        credentials=None  # All datasets now use public sources
     )
 
     if success:
