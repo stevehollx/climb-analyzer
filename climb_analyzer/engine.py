@@ -10320,17 +10320,27 @@ def process_region_without_chunking(
         # Initialize error logger for tracking elevation failures
         region_name = metadata.get("address", "Unknown Region")
 
-        # Construct base filename from metadata to match output file naming
-        # This matches the pattern used in the final output filename
-        safe_name = "".join(c for c in region_name if c.isalnum() or c in (" ", "-", "_")).rstrip()
+        # Apply same scope_info formatting as xlsx output (see lines 11230-11242)
+        # Extract just the region name from path formats like "us > hawaii" or "europe/france"
+        if " > " in region_name:
+            formatted_name = region_name.split(" > ")[-1]
+        elif "/" in region_name:
+            formatted_name = region_name.split("/")[-1]
+        else:
+            formatted_name = region_name
+
+        # Convert to title case for cleaner filenames (e.g., "california" -> "California")
+        formatted_name = formatted_name.replace("-", " ").title()
+
+        # Make safe for filenames
+        safe_name = "".join(c for c in formatted_name if c.isalnum() or c in (" ", "-", "_")).rstrip()
         safe_name = safe_name.replace(" ", "_")[:50]
 
-        # Create error log filename to match output file pattern
-        # Format: <region>_errors_<surface>_<date>.txt
-        # Example: Luxembourg_errors_all_2025-10-24.txt
+        # Create error log filename to match output file naming
+        # Format: <region>_errors_<date>.txt (no surface filter, matches xlsx date at end)
+        # Example: California_errors_2025-12-31.txt
         date_str = datetime.now().strftime("%Y-%m-%d")
-        filter_str = f"{surface_filter}"
-        base_filename = f"{safe_name}_errors_{filter_str}_{date_str}"
+        base_filename = f"{safe_name}_errors_{date_str}"
 
         error_logger = ErrorLogger(
             region_name=region_name,
