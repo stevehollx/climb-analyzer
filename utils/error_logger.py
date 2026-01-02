@@ -246,25 +246,34 @@ class ErrorLogger:
                     # Write CSV data
                     f.writelines(csv_data_lines)
 
-                # Check if date changed during analysis and rename file if needed
-                # This ensures error log date matches xlsx output date
+                # Rename error file to match xlsx naming: {Region}_errors_{date}.txt
+                # This handles both date changes AND old format files from checkpoint resume
                 current_date_str = run_end_time.strftime("%Y-%m-%d")
+
+                # Format region name same way as xlsx (extract last part, title case)
+                region_name = self.region_name
+                if " > " in region_name:
+                    formatted_name = region_name.split(" > ")[-1]
+                elif "/" in region_name:
+                    formatted_name = region_name.split("/")[-1]
+                else:
+                    formatted_name = region_name
+                formatted_name = formatted_name.replace("-", " ").title()
+                safe_name = "".join(c for c in formatted_name if c.isalnum() or c in (" ", "-", "_")).rstrip()
+                safe_name = safe_name.replace(" ", "_")[:50]
+
+                # Build expected filename
+                expected_filename = f"{safe_name}_errors_{current_date_str}.txt"
                 current_filename = self.elevation_error_log.name
 
-                # Pattern: {region}_errors_{date}.txt
-                date_match = re.search(r'_(\d{4}-\d{2}-\d{2})\.txt$', current_filename)
-                if date_match:
-                    file_date = date_match.group(1)
-                    if file_date != current_date_str:
-                        # Date changed during analysis - rename file
-                        new_filename = current_filename.replace(f"_{file_date}.txt", f"_{current_date_str}.txt")
-                        new_path = self.elevation_error_log.parent / new_filename
-                        try:
-                            self.elevation_error_log.rename(new_path)
-                            self.elevation_error_log = new_path
-                            print(f"   (Error log date updated: {file_date} -> {current_date_str})")
-                        except Exception:
-                            pass  # Silent failure - original file is still valid
+                if current_filename != expected_filename:
+                    new_path = self.elevation_error_log.parent / expected_filename
+                    try:
+                        self.elevation_error_log.rename(new_path)
+                        self.elevation_error_log = new_path
+                        print(f"   (Error log renamed: {current_filename} -> {expected_filename})")
+                    except Exception:
+                        pass  # Silent failure - original file is still valid
 
                 print(f"✓ Elevation error log saved to {self.elevation_error_log} ({self.error_count:,} coordinates)")
             except Exception as e:

@@ -7,6 +7,10 @@ Checks all prerequisites, sets up Docker containers, and guides through data con
 
 Run this ONCE when first setting up the climb analyzer:
     python setup_wizard.py
+
+IMPORTANT: This file must be self-contained with NO external dependencies beyond
+the Python standard library. Users run this before Docker containers are built,
+so climb_analyzer package dependencies (tqdm, pandas, etc.) are not available.
 """
 
 import os
@@ -14,17 +18,115 @@ import shutil
 import subprocess
 import sys
 
-# Import centralized formatting utilities
-from climb_analyzer.utils.formatting import (
-    print_banner,
-    print_error,
-    print_header,
-    print_info,
-    print_list_item,
-    print_section_simple,
-    print_success,
-    print_warning,
-)
+# ============================================================================
+# INLINE FORMATTING UTILITIES (self-contained, no external dependencies)
+# ============================================================================
+# These are copied from climb_analyzer/utils/formatting.py to make setup_wizard.py
+# completely standalone. Users run setup before Docker is built, so they don't
+# have access to the climb_analyzer package or its dependencies.
+
+STANDARD_WIDTH = 80
+
+# ANSI color codes for terminal output
+class _Colors:
+    """ANSI color codes for terminal output."""
+    COLORS_ENABLED = (
+        sys.stdout.isatty() and
+        os.environ.get('TERM') != 'dumb' and
+        os.environ.get('NO_COLOR') is None
+    )
+
+    if COLORS_ENABLED:
+        RESET = '\033[0m'
+        BOLD = '\033[1m'
+        DIM = '\033[2m'
+        GREEN = '\033[32m'
+        YELLOW = '\033[33m'
+        RED = '\033[31m'
+        BLUE = '\033[34m'
+        CYAN = '\033[36m'
+        GRAY = '\033[90m'
+    else:
+        RESET = BOLD = DIM = ''
+        GREEN = YELLOW = RED = BLUE = CYAN = GRAY = ''
+
+_C = _Colors()
+
+# Box-drawing characters
+_BOX_H = '─'
+_BOX_V = '│'
+_BOX_TL = '┌'
+_BOX_TR = '┐'
+_BOX_BL = '└'
+_BOX_BR = '┘'
+
+
+def print_banner(text: str, width: int = STANDARD_WIDTH, spacing_before: int = 2) -> None:
+    """Print a major section banner with box-drawing characters."""
+    print('\n' * spacing_before, end='')
+    top = _BOX_TL + _BOX_H * (width - 2) + _BOX_TR
+    bottom = _BOX_BL + _BOX_H * (width - 2) + _BOX_BR
+    text = text.upper()
+    text_padded = f" {text} ".ljust(width - 2)
+    middle = _C.CYAN + _BOX_V + _C.RESET + _C.BOLD + text_padded + _C.RESET + _C.CYAN + _BOX_V + _C.RESET
+    print(_C.CYAN + top + _C.RESET)
+    print(middle)
+    print(_C.CYAN + bottom + _C.RESET)
+    print()
+
+
+def print_header(text: str, width: int = STANDARD_WIDTH, spacing_before: int = 1) -> None:
+    """Print a subsection header with box-drawing characters."""
+    print('\n' * spacing_before, end='')
+    top = _BOX_TL + _BOX_H * (width - 2) + _BOX_TR
+    bottom = _BOX_BL + _BOX_H * (width - 2) + _BOX_BR
+    text_padded = f" {text} ".ljust(width - 2)
+    middle = _C.BLUE + _BOX_V + _C.RESET + text_padded + _C.BLUE + _BOX_V + _C.RESET
+    print(_C.BLUE + top + _C.RESET)
+    print(middle)
+    print(_C.BLUE + bottom + _C.RESET)
+    print()
+
+
+def print_section_simple(text: str, spacing_before: int = 1) -> None:
+    """Print a simple section label (no box)."""
+    print('\n' * spacing_before, end='')
+    print(f"{_C.BOLD}{text}{_C.RESET}")
+
+
+def print_success(text: str, indent: int = 0) -> None:
+    """Print a success message with checkmark."""
+    indent_str = ' ' * indent
+    print(f"{indent_str}{_C.GREEN}✓{_C.RESET} {text}")
+
+
+def print_warning(text: str, indent: int = 0) -> None:
+    """Print a warning message with warning symbol."""
+    indent_str = ' ' * indent
+    print(f"{indent_str}{_C.YELLOW}⚠️ {_C.RESET} {text}")
+
+
+def print_error(text: str, indent: int = 0) -> None:
+    """Print an error message with X symbol."""
+    indent_str = ' ' * indent
+    print(f"{indent_str}{_C.RED}✗{_C.RESET} {text}")
+
+
+def print_info(text: str, indent: int = 0) -> None:
+    """Print an informational message (no icon)."""
+    indent_str = ' ' * indent
+    print(f"{indent_str}{_C.GRAY}{text}{_C.RESET}")
+
+
+def print_list_item(text: str, indent: int = 2, bullet: str = '•') -> None:
+    """Print a list item with bullet point."""
+    indent_str = ' ' * indent
+    print(f"{indent_str}{bullet} {text}")
+
+
+# ============================================================================
+# END INLINE FORMATTING UTILITIES
+# ============================================================================
 
 # REMOVED: NASA Earthdata credential functions
 # As of December 2025, NASA LP DAAC Data Pool was retired.
@@ -67,11 +169,20 @@ def check_docker_dependencies():
         print_success(f"Docker found: {version}", indent=2)
         docker_ok = True
 
-        # Check if Docker daemon is running
-        result = subprocess.run(["docker", "info"], capture_output=True, check=False)
+        # Check if Docker daemon is running and accessible
+        result = subprocess.run(["docker", "info"], capture_output=True, text=True, check=False)
         if result.returncode != 0:
-            print_warning("Docker is installed but daemon is not running", indent=2)
-            messages.append("Start Docker: sudo systemctl start docker")
+            stderr = result.stderr.lower() if result.stderr else ""
+            if "permission denied" in stderr or "got permission denied" in stderr:
+                print_error("Docker permission denied - your user is not in the docker group", indent=2)
+                messages.append("Fix permissions: sudo usermod -aG docker $USER")
+                messages.append("Then log out and log back in (or run 'newgrp docker')")
+            elif "cannot connect" in stderr or "is the docker daemon running" in stderr:
+                print_warning("Docker daemon is not running", indent=2)
+                messages.append("Start Docker: sudo systemctl start docker")
+            else:
+                print_warning("Docker is installed but not accessible", indent=2)
+                messages.append("Check Docker installation and try again")
             docker_ok = False
     else:
         print_error("Docker NOT found", indent=2)

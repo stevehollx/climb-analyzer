@@ -12318,7 +12318,10 @@ def complete_analysis_from_segments(
 
     # Generate elevation profiles for all climbs
     if climbs:
-        from climb_analyzer.data.elevation_profile import generate_elevation_profile
+        from climb_analyzer.data.elevation_profile import (
+            generate_elevation_profile,
+            downsample_profile,
+        )
 
         print("\n")  # Spacing before progress bar
         for climb in tqdm(
@@ -12368,6 +12371,13 @@ def complete_analysis_from_segments(
                     climb.elevation_profile = generate_elevation_profile(
                         climb.nodes, profile_elevations
                     )
+
+                    # Downsample long profiles to fit Excel cell limit (32k chars)
+                    if len(climb.elevation_profile) > 30000:
+                        climb.elevation_profile = downsample_profile(
+                            climb.elevation_profile,
+                            max_chars=30000,
+                        )
 
                 except Exception as e:
                     climb.elevation_profile = ""
@@ -17712,7 +17722,9 @@ def rebuild_opentopodata_after_deletion():
         print("\n🔄 Updating OpenTopoData configuration...")
 
         # Update config based on remaining elevation data
-        update_config()
+        elevation_data_dir = Path("data/elevation_data")
+        config_path = Path("opentopodata/config.yaml")
+        update_config(elevation_data_dir, config_path)
 
         # Restart the service
         print("🔄 Restarting OpenTopoData service...")
@@ -20214,11 +20226,13 @@ def main():
         print(f"   Using temporary directory instead: {output_dir}")
 
     # Create a safe filename (used in multiple places below)
+    # Apply same formatting as streaming mode (lines 10325-10337) for consistent naming
     if scope_type == "address":
         safe_name = "".join(c for c in address if c.isalnum() or c in (" ", "-", "_")).rstrip()
         safe_name = safe_name.replace(" ", "_")[:50]
     else:
         # Handle both string and list location formats
+        # Extract just the region name (e.g., "california" from "us/california" or "us > california")
         if isinstance(location, list):
             # For region scope, location is a list of tuples: [("continent", ("path",))]
             # Extract readable names from the structure
@@ -20240,9 +20254,23 @@ def main():
                 else:
                     # Simple string (state/country names)
                     location_parts.append(str(item))
-            safe_name = "_".join(location_parts).replace(" ", "_").replace("-", "_")
+            # Use only the last part (most specific region name)
+            region_name = location_parts[-1] if location_parts else "unknown"
         else:
-            safe_name = str(location).replace(" ", "_")
+            region_name = str(location)
+
+        # Extract just the region name from path formats like "us > california" or "us/california"
+        if " > " in region_name:
+            region_name = region_name.split(" > ")[-1]
+        elif "/" in region_name:
+            region_name = region_name.split("/")[-1]
+
+        # Convert to title case for cleaner filenames (e.g., "california" -> "California")
+        formatted_name = region_name.replace("-", " ").replace("_", " ").title()
+
+        # Make safe for filenames
+        safe_name = "".join(c for c in formatted_name if c.isalnum() or c in (" ", "-", "_")).rstrip()
+        safe_name = safe_name.replace(" ", "_")[:50]
 
     # Create consistent base filename with date (used in error logging and cloud cache)
     from datetime import datetime
@@ -20378,8 +20406,9 @@ def main():
     )
 
     if has_elevation_stats():
-        # Use same base_filename format for error CSV: <region>_errors_<filters>_<date>
-        error_base_filename = f"{safe_name}_errors_{filter_str}_{date_str}"
+        # Use same base_filename format as streaming mode: <region>_errors_<date>
+        # (no filter_str - matches xlsx naming pattern)
+        error_base_filename = f"{safe_name}_errors_{date_str}"
 
         error_logger = ErrorLogger(
             region_name="Analysis Results",

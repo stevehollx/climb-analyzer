@@ -58,10 +58,38 @@ print_info() {
 
 # Function to check if Docker is running
 check_docker() {
-    if ! docker info >/dev/null 2>&1; then
-        print_error "Docker is not running or not accessible"
-        echo "Please start Docker and try again"
-        exit 1
+    local docker_output
+    docker_output=$(docker info 2>&1)
+    local exit_code=$?
+
+    if [ $exit_code -ne 0 ]; then
+        # Check if it's a permission issue
+        if echo "$docker_output" | grep -qi "permission denied\|Got permission denied\|connect: permission denied"; then
+            print_error "Docker permission denied - your user is not in the docker group"
+            echo ""
+            echo "To fix this, run:"
+            echo "  sudo usermod -aG docker \$USER"
+            echo ""
+            echo "Then log out and log back in (or run 'newgrp docker' for current session)"
+            echo "After that, run ./climb-analyzer setup again"
+            exit 1
+        elif echo "$docker_output" | grep -qi "Cannot connect\|connection refused\|Is the docker daemon running"; then
+            print_error "Docker daemon is not running"
+            echo ""
+            echo "Please start Docker:"
+            echo "  sudo systemctl start docker"
+            echo ""
+            echo "To enable Docker on boot:"
+            echo "  sudo systemctl enable docker"
+            exit 1
+        else
+            print_error "Docker is not accessible"
+            echo ""
+            echo "Error details: $docker_output"
+            echo ""
+            echo "Please ensure Docker is installed and running"
+            exit 1
+        fi
     fi
 }
 
@@ -173,13 +201,10 @@ export HOST_GID=$(id -g)
 
 # Export Docker group ID for socket access (needed for rebuilding OpenTopoData from container)
 if [[ "$OSTYPE" == "darwin"* ]]; then
-    # macOS: Docker Desktop manages socket permissions differently
-    # Use the docker socket's group ID if accessible
-    if [ -S /var/run/docker.sock ]; then
-        export DOCKER_GID=$(stat -f '%g' /var/run/docker.sock)
-    else
-        export DOCKER_GID=0  # root group on macOS
-    fi
+    # macOS: Docker Desktop runs Docker inside a Linux VM. The host socket's
+    # GID doesn't translate to the VM, so we always use GID 0 (root group)
+    # which reliably grants access to the Docker socket inside containers.
+    export DOCKER_GID=0
 else
     # Linux: Get the docker group GID
     if getent group docker >/dev/null 2>&1; then
@@ -209,6 +234,13 @@ if [ ! -f ".env" ]; then
             sed -i "s/^DOCKER_GID=.*/DOCKER_GID=$DOCKER_GID/" .env
         fi
         print_success "Created .env with HOST_UID=$HOST_UID, HOST_GID=$HOST_GID, DOCKER_GID=$DOCKER_GID"
+    fi
+else
+    # Existing .env file - ensure DOCKER_GID is set (may be missing from older .env files)
+    if ! grep -q "^DOCKER_GID=" .env 2>/dev/null; then
+        echo "" >> .env  # Ensure newline before appending
+        echo "DOCKER_GID=$DOCKER_GID" >> .env
+        print_info "Added DOCKER_GID=$DOCKER_GID to existing .env file"
     fi
 fi
 

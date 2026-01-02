@@ -17,9 +17,13 @@ def determine_segment_interval(total_distance_m: float) -> float:
     - Short climbs (<1km): 25m intervals for fine detail
     - Standard climbs (1-5km): 50m intervals
     - Medium climbs (5-10km): 75m intervals
-    - Long climbs (>10km): Dynamically scaled to target max 2500 segments
-      This ensures profiles fit within Excel's 32,767 char limit even for
-      ultra-long trails like the Great Himalaya Trail (1700km) or PCT (4265km)
+    - Long climbs (10-50km): Target ~1200 segments
+    - Very long climbs (50-200km): Target ~1000 segments
+    - Ultra-long trails (200km+): Target ~800 segments
+
+    The reduced segment count for ultra-long trails ensures profiles fit within
+    Excel's 32,767 char limit even after adding critical points (peaks/valleys).
+    downsample_profile() provides a safety net if output still exceeds limits.
 
     Args:
         total_distance_m: Total climb distance in meters
@@ -33,12 +37,18 @@ def determine_segment_interval(total_distance_m: float) -> float:
         return 50
     elif total_distance_m < 10000:
         return 75
-    else:
-        # Scale interval to target max 1500 evenly-spaced segments
-        # Critical points (peaks, valleys) add ~10-20% more segments
-        # With ~15 chars/segment, 1800 total segments = 27,000 chars
-        # This fits within Excel's 32,767 char cell limit with margin
-        return max(100, total_distance_m / 1500)
+    elif total_distance_m < 50000:  # 10-50km
+        # Target ~1200 evenly-spaced segments
+        # With critical points, expect ~1500 total
+        return max(100, total_distance_m / 1200)
+    elif total_distance_m < 200000:  # 50-200km
+        # Target ~1000 evenly-spaced segments
+        # Trails like JMT (335km) need more room for critical points
+        return max(150, total_distance_m / 1000)
+    else:  # 200km+ (PCT, CDT, etc.)
+        # Target ~800 segments for ultra-long trails
+        # These will have many peaks/valleys, so leave plenty of room
+        return max(300, total_distance_m / 800)
 
 
 def haversine_distance(node1: Dict, node2: Dict) -> float:
@@ -278,11 +288,12 @@ def downsample_profile(profile_str: str, max_chars: int = 30000) -> str:
     """
     Downsample elevation profile to fit within character limit (e.g., Excel cells).
 
-    Preserves:
-    - Start and end points
-    - Local maxima (peaks) and minima (valleys)
-    - Grade sign changes (descent boundaries)
-    - Evenly samples remaining points
+    For ultra-long trails (200+ km), uses intelligent downsampling:
+    - Always preserves start and end points
+    - Ranks critical points (peaks, valleys) by significance (elevation change)
+    - Keeps most significant critical points up to limit
+    - Fills remaining slots with evenly-spaced points
+    - Guarantees output fits within max_chars
 
     Args:
         profile_str: Original pipe-delimited profile
@@ -308,8 +319,7 @@ def downsample_profile(profile_str: str, max_chars: int = 30000) -> str:
                     "dist": float(parts[0]),
                     "elev": float(parts[1]),
                     "grade": float(parts[2]),
-                    "original": seg,
-                    "critical": False
+                    "idx": len(parsed),
                 })
             except ValueError:
                 continue
@@ -317,55 +327,94 @@ def downsample_profile(profile_str: str, max_chars: int = 30000) -> str:
     if len(parsed) <= 3:
         return profile_str
 
-    # Mark critical points - always preserve start and end
-    parsed[0]["critical"] = True
-    parsed[-1]["critical"] = True
+    # Calculate target segment count with safety margin
+    # Use 14 chars as conservative estimate (allows for 6-digit distances)
+    avg_seg_len = max(14, len(profile_str) / len(segments))
+    max_segments = int((max_chars - 200) / avg_seg_len)  # 200 char safety margin
 
-    # Mark local maxima, minima, and grade sign changes
+    # Always keep start and end
+    must_keep = {0, len(parsed) - 1}
+
+    # Score all points by their significance (elevation change from neighbors)
+    # Higher score = more important to keep (bigger peaks/valleys)
+    point_scores = []
     for i in range(1, len(parsed) - 1):
         prev_elev = parsed[i - 1]["elev"]
         curr_elev = parsed[i]["elev"]
         next_elev = parsed[i + 1]["elev"]
-        prev_grade = parsed[i - 1]["grade"]
-        curr_grade = parsed[i]["grade"]
 
-        # Local maxima (peaks)
-        if curr_elev > prev_elev and curr_elev > next_elev:
-            parsed[i]["critical"] = True
+        # Is this a local peak or valley?
+        is_peak = curr_elev > prev_elev and curr_elev > next_elev
+        is_valley = curr_elev < prev_elev and curr_elev < next_elev
 
-        # Local minima (valleys)
-        elif curr_elev < prev_elev and curr_elev < next_elev:
-            parsed[i]["critical"] = True
+        if is_peak or is_valley:
+            # Score by magnitude of elevation change
+            elev_change = abs(curr_elev - prev_elev) + abs(curr_elev - next_elev)
+            point_scores.append((i, elev_change, "peak" if is_peak else "valley"))
+        else:
+            # Check for significant grade changes (descent boundaries)
+            prev_grade = parsed[i - 1]["grade"]
+            curr_grade = parsed[i]["grade"]
+            if (prev_grade >= 0 and curr_grade < -2) or (prev_grade < -2 and curr_grade >= 0):
+                # Use grade change magnitude as score
+                grade_change = abs(curr_grade - prev_grade)
+                point_scores.append((i, grade_change * 10, "grade_change"))
 
-        # Grade sign changes (descent start/end)
-        if (prev_grade >= 0 and curr_grade < -1) or (prev_grade < -1 and curr_grade >= 0):
-            parsed[i]["critical"] = True
+    # Sort by significance (highest first) and take top N
+    point_scores.sort(key=lambda x: x[1], reverse=True)
 
-    # Calculate target number of segments to fit within limit
-    avg_seg_len = len(profile_str) / len(segments)
-    target_segments = int(max_chars / avg_seg_len) - 10  # Safety margin
+    # Reserve ~40% of slots for critical points, ~60% for evenly-spaced
+    max_critical = max(10, int(max_segments * 0.4))
+    critical_indices = set()
+    for idx, score, ptype in point_scores[:max_critical]:
+        critical_indices.add(idx)
 
-    critical_indices = [i for i, p in enumerate(parsed) if p["critical"]]
-    non_critical_indices = [i for i, p in enumerate(parsed) if not p["critical"]]
+    # Add must-keep points
+    critical_indices.update(must_keep)
 
-    # Sample non-critical points evenly to fill remaining slots
-    remaining_slots = target_segments - len(critical_indices)
-    if remaining_slots > 0 and non_critical_indices:
-        step = max(1, len(non_critical_indices) // remaining_slots)
-        sampled_indices = non_critical_indices[::step][:remaining_slots]
-    else:
-        sampled_indices = []
+    # Fill remaining slots with evenly-spaced points
+    remaining_slots = max_segments - len(critical_indices)
+    if remaining_slots > 0:
+        # Create evenly spaced indices across the full range
+        step = max(1, len(parsed) / remaining_slots)
+        evenly_spaced = []
+        pos = step / 2  # Start offset to avoid clustering at edges
+        while pos < len(parsed) and len(evenly_spaced) < remaining_slots:
+            idx = int(pos)
+            if idx not in critical_indices:
+                evenly_spaced.append(idx)
+            pos += step
+        critical_indices.update(evenly_spaced[:remaining_slots])
 
-    # Combine critical and sampled indices, sort by position
-    keep_indices = sorted(set(critical_indices + sampled_indices))
+    # Sort indices and build output
+    keep_indices = sorted(critical_indices)
 
-    # Build result using compact format (int dist, int elev, 1 decimal grade)
-    # This ensures consistent output regardless of input format
+    # Build result using compact format
     result_parts = []
     for i in keep_indices:
         p = parsed[i]
         result_parts.append(f"{int(p['dist'])},{int(p['elev'])},{p['grade']:.1f}")
-    return "|".join(result_parts)
+
+    result = "|".join(result_parts)
+
+    # Safety check: if still over limit, aggressively downsample
+    # This handles edge cases where segment chars are longer than expected
+    while len(result) > max_chars and len(keep_indices) > 10:
+        # Remove every other non-essential point
+        new_indices = [keep_indices[0]]  # Keep start
+        for i in range(1, len(keep_indices) - 1):
+            if i % 2 == 0:  # Keep every other point
+                new_indices.append(keep_indices[i])
+        new_indices.append(keep_indices[-1])  # Keep end
+        keep_indices = new_indices
+
+        result_parts = []
+        for i in keep_indices:
+            p = parsed[i]
+            result_parts.append(f"{int(p['dist'])},{int(p['elev'])},{p['grade']:.1f}")
+        result = "|".join(result_parts)
+
+    return result
 
 
 def parse_elevation_profile(profile_str: str) -> List[Dict[str, float]]:
