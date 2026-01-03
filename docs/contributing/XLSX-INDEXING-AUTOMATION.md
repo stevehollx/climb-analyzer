@@ -47,52 +47,81 @@ The region name is extracted from the filename as the text before `_climbs`:
 
 ## Generated Index Structure
 
-The `index.json` file contains:
+The `index.json` file contains metadata for all published climb data files:
 
 ```json
 {
-  "version": "1.0.0",
-  "generated_at": "2025-11-01T12:00:00Z",
+  "version": "2.0.0",
+  "generated_at": "2026-01-03T18:07:06Z",
   "repository": "stevehollx/global-road-and-trail-climbs",
   "summary": {
     "total_regions": 5,
-    "total_files": 9,
-    "regions_with_split_files": 3,
-    "by_continent": {
-      "europe": 2,
-      "asia": 1,
-      "north-america": 1,
-      "oceania": 1
-    }
+    "total_xlsx_files": 9,
+    "total_sqlite_files": 5,
+    "total_xlsx_size_bytes": 123456789,
+    "total_sqlite_size_bytes": 234567890,
+    "total_size_mb": 342.5,
+    "total_climbs": 1234567
   },
   "regions": {
-    "europe/luxembourg": {
-      "region_name": "Luxembourg",
-      "files": ["Luxembourg_climbs_all_basic_2025-11-01_v2.0.0_e0000.xlsx"],
+    "north-america/united-states-of-america/hawaii": {
+      "region_name": "Hawaii",
+      "version": "2.3.0",
+      "release_tag": "hawaii-v2.3.0",
+      "release_url": "https://github.com/stevehollx/global-road-and-trail-climbs/releases/tag/hawaii-v2.3.0",
+      "climb_count": 83237,
+      "elevation_errors": 0,
+      "files": ["Hawaii_climbs_all-surfaces_all-access_imperial_2026-01-03_v2.3.0_e0000.xlsx"],
       "download_urls": [
-        "https://raw.githubusercontent.com/stevehollx/global-road-and-trail-climbs/main/europe/luxembourg/Luxembourg_climbs_all_basic_2025-11-01_v2.0.0_e0000.xlsx"
+        "https://github.com/stevehollx/global-road-and-trail-climbs/releases/download/hawaii-v2.3.0/Hawaii_climbs_...xlsx"
       ],
+      "file_sizes": [15166008],
       "file_count": 1,
-      "has_split_files": false
+      "has_split_files": false,
+      "database_file": "Hawaii_climbs_all-surfaces_all-access_imperial_2026-01-03_v2.3.0_e0000.sqlite",
+      "database_size": 33030144,
+      "database_url": "https://github.com/stevehollx/global-road-and-trail-climbs/releases/download/hawaii-v2.3.0/Hawaii_climbs_...sqlite",
+      "published_at": "2026-01-03T18:04:19Z"
     },
     "europe/belgium": {
       "region_name": "Belgium",
+      "version": "2.0.0",
       "files": [
         "Belgium_climbs_all_basic_2025-11-01_v2.0.0_e0000-1.xlsx",
-        "Belgium_climbs_all_basic_2025-11-01_v2.0.0_e0000-2.xlsx",
-        "Belgium_climbs_all_basic_2025-11-01_v2.0.0_e0000-3.xlsx"
+        "Belgium_climbs_all_basic_2025-11-01_v2.0.0_e0000-2.xlsx"
       ],
-      "download_urls": [
-        "https://raw.githubusercontent.com/stevehollx/global-road-and-trail-climbs/main/europe/belgium/Belgium_climbs_all_basic_2025-11-01_v2.0.0_e0000-1.xlsx",
-        "https://raw.githubusercontent.com/stevehollx/global-road-and-trail-climbs/main/europe/belgium/Belgium_climbs_all_basic_2025-11-01_v2.0.0_e0000-2.xlsx",
-        "https://raw.githubusercontent.com/stevehollx/global-road-and-trail-climbs/main/europe/belgium/Belgium_climbs_all_basic_2025-11-01_v2.0.0_e0000-3.xlsx"
-      ],
-      "file_count": 3,
-      "has_split_files": true
+      "file_sizes": [50000000, 45000000],
+      "file_count": 2,
+      "has_split_files": true,
+      "database_file": "Belgium_climbs_...sqlite",
+      "database_size": 120000000
     }
   }
 }
 ```
+
+### Key Fields
+
+| Field | Description |
+|-------|-------------|
+| `region_name` | Human-readable region name |
+| `files` | List of XLSX filenames |
+| `download_urls` | Direct download URLs for XLSX files |
+| `file_sizes` | Size in bytes for each XLSX file |
+| `database_file` | SQLite database filename |
+| `database_size` | SQLite file size in bytes |
+| `database_url` | Direct download URL for SQLite file |
+| `climb_count` | Total number of climbs in this region |
+
+## Database Files
+
+Each region includes a SQLite database alongside the XLSX files. The SQLite format is optimized for the iOS companion app with:
+
+- **UUID primary keys** - Stable identifiers across data updates
+- **Geohash columns** - 6 precision levels (p1-p6) for efficient spatial queries
+- **R-tree spatial index** - Fast bounding-box location lookups
+- **19 optimized indexes** - For common filter and sort operations
+- **Aggregated stats** - Per-file statistics in `file_stats` table
 
 ## File Locations
 
@@ -134,10 +163,14 @@ response = requests.get(index_url)
 index_data = response.json()
 
 # Get all files for a specific region
-luxembourg_data = index_data["regions"]["europe/luxembourg"]
-for url in luxembourg_data["download_urls"]:
+hawaii_data = index_data["regions"]["north-america/united-states-of-america/hawaii"]
+for url in hawaii_data["download_urls"]:
     print(f"Downloading: {url}")
-    # Download the file...
+    # Download XLSX file...
+
+# Download the SQLite database for iOS app
+sqlite_url = hawaii_data["database_url"]
+print(f"Database: {sqlite_url}")
 ```
 
 ### Finding Split Files

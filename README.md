@@ -64,6 +64,18 @@ Results are Excel files with detailed climb data:
 | Surface | Paved, gravel, dirt |
 | OSM Link | View in OpenStreetMap |
 
+## Output Formats
+
+### Excel (XLSX)
+Human-readable spreadsheets that can be filtered, sorted, and analyzed in Excel or Google Sheets.
+
+### SQLite Database
+iOS-optimized database format for the companion mobile app:
+- **UUID primary keys** - Stable identifiers across data updates
+- **Geohash columns** - 6 precision levels for efficient spatial queries
+- **R-tree spatial index** - Fast bounding-box location lookups
+- **19 optimized indexes** - For common filter and sort operations
+
 ## Pocket iOS App
 
 <img src="https://github.com/stevehollx/global-road-and-trail-climbs/blob/main/images/ios_map.png" alt="iOS map" width="30%"> <img src="https://github.com/stevehollx/global-road-and-trail-climbs/blob/main/images/ios_climb_info.png" alt="iOS climb info" width="30%">
