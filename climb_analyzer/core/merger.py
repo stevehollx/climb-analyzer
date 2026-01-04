@@ -99,6 +99,7 @@ def _merge_street_batch_worker_top_level(args):
 
     Args:
         args: Tuple of (street_items_batch, coordinate_tolerance, distance_tolerance_m)
+              street_items_batch contains ((street_name, surface), segments) tuples
 
     Returns:
         List of merged segments for all streets in batch
@@ -113,7 +114,10 @@ def _merge_street_batch_worker_top_level(args):
     merger.distance_tolerance_m = distance_tolerance_m
 
     batch_results = []
-    for street_name, street_segments in street_items_batch:
+    for group_key, street_segments in street_items_batch:
+        # group_key is now (street_name, surface) tuple
+        street_name, surface = group_key
+
         try:
             # Determine merge strategy based on street characteristics
             common_names = {"service", "track", "path", "footway", "cycleway",
@@ -131,7 +135,7 @@ def _merge_street_batch_worker_top_level(args):
         except Exception as e:
             # Log error but continue processing other streets
             import traceback
-            print(f"\nError in worker processing street '{street_name}': {e}")
+            print(f"\nError in worker processing street '{street_name}' (surface={surface}): {e}")
             traceback.print_exc()
             # Include unmerged segments as fallback
             batch_results.extend(street_segments)
@@ -1031,13 +1035,14 @@ class BoundaryMerger:
                 def get_checkpoint_info(self, i):
                     return {'time_until_next_min': 5.0}
 
-        # Group segments by street name
-        print("Grouping segments by street name...")
-        segments_by_name = defaultdict(list)
+        # Group segments by street name AND surface type
+        # This prevents merging segments with different surfaces (e.g., paved vs gravel)
+        print("Grouping segments by street name and surface...")
+        segments_by_key = defaultdict(list)
 
         with tqdm(
             total=len(all_segments),
-            desc="Grouping by street name",
+            desc="Grouping by name+surface",
             unit="segments",
             miniters=len(all_segments) // 100,
             dynamic_ncols=True,
@@ -1047,17 +1052,19 @@ class BoundaryMerger:
             for segment in all_segments:
                 street_name = segment.get("street_name", "").strip()
                 if street_name:
-                    segments_by_name[street_name].append(segment)
+                    surface = segment.get("surface", "unknown")
+                    key = (street_name, surface)
+                    segments_by_key[key].append(segment)
 
                 if pbar.n % max(1, len(all_segments) // 100) == 0:
-                    pbar.set_postfix({"unique_streets": len(segments_by_name)})
+                    pbar.set_postfix({"unique_groups": len(segments_by_key)})
                 pbar.update(1)
 
         # Prepare for processing
-        streets_to_merge = {name: segs for name, segs in segments_by_name.items() if len(segs) > 1}
+        streets_to_merge = {key: segs for key, segs in segments_by_key.items() if len(segs) > 1}
         single_segments = []
 
-        for name, segs in segments_by_name.items():
+        for key, segs in segments_by_key.items():
             if len(segs) == 1:
                 single_segments.extend(segs)
 
@@ -1065,7 +1072,7 @@ class BoundaryMerger:
 
         # FREE MEMORY: Delete large data structures we no longer need
         del all_segments  # Original segment list no longer needed
-        del segments_by_name  # Temporary grouping dict no longer needed
+        del segments_by_key  # Temporary grouping dict no longer needed
 
         # Force garbage collection
         import gc
@@ -1100,7 +1107,10 @@ class BoundaryMerger:
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]",
         ) as pbar:
             postfix_update_counter = 0
-            for i, (street_name, street_segments) in enumerate(street_items):
+            for i, (group_key, street_segments) in enumerate(street_items):
+                # group_key is now (street_name, surface) tuple
+                street_name, surface = group_key
+
                 # Signal handler check every 10 streets
                 if i % 10 == 0:
                     signal_handler.set_operation(
@@ -1139,9 +1149,13 @@ class BoundaryMerger:
                     sys.exit(0)
 
                 try:
-                    # Process this street
+                    # Process this street (display includes surface if not unknown)
+                    if surface and surface != "unknown":
+                        full_name = f"{street_name} ({surface})"
+                    else:
+                        full_name = street_name
                     display_name = (
-                        street_name[:12] + "..." if len(street_name) > 15 else street_name
+                        full_name[:12] + "..." if len(full_name) > 15 else full_name
                     )
 
                     # Show detailed progress for different street sizes
@@ -1165,8 +1179,8 @@ class BoundaryMerger:
                         street_segments, street_name, persistence
                     )
                     merged_segments.extend(merged_street_segments)
-                    processed_streets.append(street_name)
-                    processed_street_segments[street_name] = merged_street_segments
+                    processed_streets.append(group_key)
+                    processed_street_segments[group_key] = merged_street_segments
 
                     # SMART CHECKPOINT CHECK
                     if checkpointer.should_checkpoint(i):
@@ -1268,13 +1282,14 @@ class BoundaryMerger:
                 def get_checkpoint_info(self, i):
                     return {'time_until_next_min': 5.0}
 
-        # Group segments by street name
-        print(f"Grouping {len(all_segments):,} segments by street name...")
-        segments_by_name = defaultdict(list)
+        # Group segments by street name AND surface type
+        # This prevents merging segments with different surfaces (e.g., paved vs gravel)
+        print(f"Grouping {len(all_segments):,} segments by street name and surface...")
+        segments_by_key = defaultdict(list)
 
         with tqdm(
             total=len(all_segments),
-            desc="Grouping by street name",
+            desc="Grouping by name+surface",
             unit="segments",
             miniters=len(all_segments) // 100,
             dynamic_ncols=True,
@@ -1284,27 +1299,29 @@ class BoundaryMerger:
             for segment in all_segments:
                 street_name = segment.get("street_name", "").strip()
                 if street_name:
-                    segments_by_name[street_name].append(segment)
+                    surface = segment.get("surface", "unknown")
+                    key = (street_name, surface)
+                    segments_by_key[key].append(segment)
 
                 if pbar.n % max(1, len(all_segments) // 100) == 0:
-                    pbar.set_postfix({"unique_streets": len(segments_by_name)})
+                    pbar.set_postfix({"unique_groups": len(segments_by_key)})
                 pbar.update(1)
 
-        # Separate single-segment streets (no merging needed)
-        streets_to_merge = {name: segs for name, segs in segments_by_name.items() if len(segs) > 1}
+        # Separate single-segment groups (no merging needed)
+        streets_to_merge = {key: segs for key, segs in segments_by_key.items() if len(segs) > 1}
         single_segments = []
 
-        for name, segs in segments_by_name.items():
+        for key, segs in segments_by_key.items():
             if len(segs) == 1:
                 single_segments.extend(segs)
 
-        print(f"\nProcessing {len(streets_to_merge):,} streets with multiple segments")
-        print(f"Skipping {len(single_segments):,} single-segment streets (no merge needed)")
+        print(f"\nProcessing {len(streets_to_merge):,} street+surface groups with multiple segments")
+        print(f"Skipping {len(single_segments):,} single-segment groups (no merge needed)")
 
         # FREE MEMORY: Delete large data structures we no longer need
         # This is critical - all_segments is ~1.5M items consuming gigabytes
         del all_segments  # Original segment list no longer needed
-        del segments_by_name  # Temporary grouping dict no longer needed
+        del segments_by_key  # Temporary grouping dict no longer needed
 
         # Force garbage collection to free memory immediately
         import gc

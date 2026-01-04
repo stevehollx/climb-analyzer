@@ -4732,6 +4732,7 @@ class ClimbEndpoints:
     end_coord: Tuple[float, float]
     grid_cells: frozenset  # Grid cells this climb touches (immutable for hashing)
     max_elevation: float = 0.0  # Max elevation for connection direction checking
+    surface: str = "unknown"  # Surface type for same-name different-surface connections
 
 
 def get_grid_cell(lat: float, lon: float, cell_size: float = 0.01) -> Tuple[int, int]:
@@ -13975,8 +13976,138 @@ class ClimbAnalyzer:
             for f in created_files:
                 print(f"   {f.name}")
 
-        # Return list of created files (for compatibility with save infrastructure)
-        return created_files
+        # ============================================================================
+        # SQLite Export - Generate iOS-compatible database alongside Excel
+        # ============================================================================
+        sqlite_files = []
+        try:
+            from climb_analyzer.data.sqlite_export import SQLiteExporter
+
+            sqlite_filename = f"{base_filename}{suffix}.sqlite"
+            sqlite_file = output_dir / sqlite_filename
+
+            print(f"\nGenerating SQLite database for iOS app...")
+
+            # Determine units for SQLite (ft or m)
+            db_units = "ft" if units == "imperial" else "m"
+
+            with SQLiteExporter(sqlite_file, file_id=sqlite_filename, units=db_units) as exporter:
+                # Re-read the sorted temp file and geocode data
+                with open(final_sorted_file.name, "rb") as f:
+                    geocode_lookup = {}
+                    if geocode_temp_file and Path(geocode_temp_file.name).exists():
+                        with open(geocode_temp_file.name, "rb") as gf:
+                            try:
+                                while True:
+                                    geocode_lookup.update(safe_pickle_load(gf))
+                            except EOFError:
+                                pass
+
+                    with tqdm(
+                        total=total_filtered, desc="  Writing SQLite", unit="climbs", **TQDM_DEFAULTS
+                    ) as pbar:
+                        batch_rows = []
+
+                        try:
+                            while True:
+                                batch_climbs = safe_pickle_load(f)
+
+                                for climb in batch_climbs:
+                                    # Build row dict matching Excel format
+                                    geocode_key = f"{climb.start_lat:.5f},{climb.start_lon:.5f}"
+                                    geocode_data = geocode_lookup.get(geocode_key, {})
+
+                                    # Distance from center
+                                    center_distance = 0.0
+                                    if analysis_center:
+                                        from math import radians, sin, cos, sqrt, atan2
+                                        lat1, lon1 = radians(analysis_center[0]), radians(analysis_center[1])
+                                        lat2, lon2 = radians(climb.start_lat), radians(climb.start_lon)
+                                        dlat, dlon = lat2 - lat1, lon2 - lon1
+                                        a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+                                        center_distance = 6371 * 2 * atan2(sqrt(a), sqrt(1-a))
+
+                                    # Unit conversions
+                                    if units == "imperial":
+                                        elev_gain = climb.elevation_gain * 3.28084
+                                        height = climb.height * 3.28084
+                                        prominence = climb.prominence * 3.28084
+                                        length = climb.length_km * 0.621371
+                                        center_distance_display = center_distance * 0.621371
+                                        elev_unit = "ft"
+                                        dist_unit = "mi"
+                                    else:
+                                        elev_gain = climb.elevation_gain
+                                        height = climb.height
+                                        prominence = climb.prominence
+                                        length = climb.length_km
+                                        center_distance_display = center_distance
+                                        elev_unit = "m"
+                                        dist_unit = "km"
+
+                                    # Way IDs
+                                    way_ids_str = str(climb.way_ids[0]) if climb.way_ids else ""
+                                    osm_links_str = climb.osm_links[0] if climb.osm_links else ""
+                                    all_way_ids_str = ", ".join(str(w) for w in (climb.way_ids or []))
+
+                                    row = {
+                                        "Street Name": climb.street_name,
+                                        "City": geocode_data.get("city", ""),
+                                        "State": geocode_data.get("state", ""),
+                                        "Country": geocode_data.get("country", ""),
+                                        f"From Center ({dist_unit})": round(center_distance_display, 1),
+                                        "Latitude": round(climb.start_lat, 5),
+                                        "Longitude": round(climb.start_lon, 5),
+                                        "Cycling": climb.cycling_access,
+                                        "Category": climb.climb_category,
+                                        "Basic Score": int(climb.climb_score),
+                                        "FIETS Score": round(climb.fiets_score, 1),
+                                        "PDI Score": round(climb.pdi_score, 1),
+                                        f"Elev Gain ({elev_unit})": round(elev_gain, 2) if elev_gain < 1 else int(elev_gain),
+                                        f"Height ({elev_unit})": round(height, 2) if height < 1 else int(height),
+                                        f"Prominence ({elev_unit})": round(prominence, 2) if prominence < 1 else int(prominence),
+                                        f"Length ({dist_unit})": round(length, 2),
+                                        "Avg Grade (%)": round(min(climb.avg_grade, 50.0), 2),
+                                        "Max Grade (%)": round(climb.max_grade, 2),
+                                        "Highway Type": climb.highway_type,
+                                        "Surface": climb.surface,
+                                        "Tracktype": climb.tracktype,
+                                        "Start Way ID": way_ids_str,
+                                        "OSM Link": osm_links_str,
+                                        "All Way IDs": all_way_ids_str,
+                                        "Connected Climbs": (
+                                            ", ".join(f"{name} ({way_id})" for name, way_id in climb.connected_climbs)
+                                            if climb.connected_climbs else "None"
+                                        ),
+                                        f"Elevation Profile ({elev_unit})": getattr(climb, "elevation_profile", "") or "",
+                                    }
+
+                                    batch_rows.append(row)
+                                    pbar.update(1)
+
+                                    # Write batch when full
+                                    if len(batch_rows) >= 5000:
+                                        exporter.write_rows(batch_rows)
+                                        batch_rows = []
+
+                        except EOFError:
+                            pass
+
+                        # Write final batch
+                        if batch_rows:
+                            exporter.write_rows(batch_rows)
+
+            sqlite_size_mb = sqlite_file.stat().st_size / (1024**2)
+            print(f"✓ Saved SQLite database: {sqlite_file.name} ({exporter.row_count:,} rows, {sqlite_size_mb:.1f} MB)")
+            sqlite_files.append(sqlite_file)
+
+        except Exception as e:
+            print(f"⚠️  SQLite export failed: {e}")
+            import traceback
+            traceback.print_exc()
+
+        # Return dict with both Excel and SQLite files
+        return {"xlsx": created_files, "sqlite": sqlite_files, "climb_count": total_filtered}
 
     # ============================================================================
     # DEAD CODE - Chunked export function (never executes)
@@ -14145,16 +14276,18 @@ class ClimbAnalyzer:
             # Check if any other climb STARTS at this climb's END
             if end_coord in start_point_index:
                 for other_idx, other_climb in start_point_index[end_coord]:
-                    # Skip same climb and same street name
+                    # Skip same climb
                     if other_idx == i:
                         continue
-                    if other_climb.street_name == climb.street_name:
+                    # Skip same street name AND same surface (they should be merged, not connected)
+                    # Allow same-name connections if surfaces differ
+                    if (other_climb.street_name == climb.street_name and
+                        getattr(other_climb, 'surface', 'unknown') == getattr(climb, 'surface', 'unknown')):
                         continue
 
-                    # Only connect if other climb continues upward
-                    # (its max elevation >= this climb's max elevation)
-                    if other_climb.max_elevation >= climb.max_elevation:
-                        climb_connections[i].add(other_idx)
+                    # Bidirectional connection - add both directions
+                    climb_connections[i].add(other_idx)
+                    climb_connections[other_idx].add(i)
 
         # Update each climb's connected_climbs field
         connections_found = 0
@@ -14225,6 +14358,7 @@ class ClimbAnalyzer:
                             end_coord=end_coord,
                             grid_cells=cells,
                             max_elevation=climb.max_elevation,
+                            surface=getattr(climb, 'surface', 'unknown'),
                         )
 
                         all_endpoints.append(endpoint)
@@ -14324,22 +14458,22 @@ class ClimbAnalyzer:
                                 ):
                                     nearby_seen.add(other.climb_idx)
 
-                                    # Skip same street name
-                                    if other.street_name == endpoint.street_name:
+                                    # Skip same street name AND same surface (they should be merged)
+                                    # Allow same-name connections if surfaces differ
+                                    if (other.street_name == endpoint.street_name and
+                                        other.surface == endpoint.surface):
                                         continue
 
-                                    # Check for valid connections (endpoint -> other continues upward)
-                                    # Connection 1: endpoint's END matches other's START (endpoint -> other)
+                                    # Bidirectional connections - no upward filter
+                                    # Connection 1: endpoint's END matches other's START
                                     if endpoint.end_coord == other.start_coord:
-                                        # Only connect if other continues upward
-                                        if other.max_elevation >= endpoint.max_elevation:
-                                            connections[endpoint.climb_idx].add(other.climb_idx)
+                                        connections[endpoint.climb_idx].add(other.climb_idx)
+                                        connections[other.climb_idx].add(endpoint.climb_idx)
 
-                                    # Connection 2: other's END matches endpoint's START (other -> endpoint)
+                                    # Connection 2: other's END matches endpoint's START
                                     if other.end_coord == endpoint.start_coord:
-                                        # Only connect if endpoint continues upward from other
-                                        if endpoint.max_elevation >= other.max_elevation:
-                                            connections[other.climb_idx].add(endpoint.climb_idx)
+                                        connections[other.climb_idx].add(endpoint.climb_idx)
+                                        connections[endpoint.climb_idx].add(other.climb_idx)
 
                 # Update progress bar after processing endpoint
                 pbar.update(1)
@@ -20357,10 +20491,25 @@ def main():
             if error_logger:
                 error_logger.stop_elevation_logging(output_file_count=0)
     else:
-        # Check if this is a streaming export (df is a list of files, not a DataFrame)
-        if isinstance(df, list) and df and all(isinstance(f, Path) for f in df):
-            # Streaming export already completed - files were saved in streaming mode
+        # Check if this is a streaming export result
+        # New format returns dict with xlsx, sqlite, climb_count
+        # Legacy format returns list of Path objects
+        sqlite_files = []
+        export_climb_count = 0
+
+        if isinstance(df, dict) and "xlsx" in df:
+            # New return format with xlsx, sqlite, and climb_count
+            created_files = df["xlsx"]
+            sqlite_files = df.get("sqlite", [])
+            export_climb_count = df.get("climb_count", 0)
+        elif isinstance(df, list) and df and all(isinstance(f, Path) for f in df):
+            # Legacy format (list of files)
             created_files = df
+        else:
+            created_files = []
+
+        if created_files:
+            # Streaming export already completed - files were saved in streaming mode
             if len(created_files) == 1:
                 print(f"Results saved to {created_files[0].name} (streaming mode)")
                 filename = created_files[0]
@@ -20369,6 +20518,11 @@ def main():
                 for f in created_files:
                     print(f"   {f.name}")
                 filename = created_files[0]  # Set to first file for compatibility
+
+            # Also report SQLite files if generated
+            if sqlite_files:
+                print(f"SQLite database: {sqlite_files[0].name}")
+
             # Close error logger with correct file count
             if error_logger:
                 error_logger.stop_elevation_logging(output_file_count=len(created_files))
@@ -20507,7 +20661,12 @@ def main():
                         # Use created_files directly if available (already have the actual files)
                         # This avoids pattern-matching issues with hierarchical region names
                         if 'created_files' in dir() and created_files:
-                            output_files = {"xlsx": [f for f in created_files if str(f).endswith('.xlsx')], "csv": None}
+                            output_files = {
+                                "xlsx": [f for f in created_files if str(f).endswith('.xlsx')],
+                                "sqlite": sqlite_files if 'sqlite_files' in dir() and sqlite_files else [],
+                                "csv": None,
+                                "climb_count": export_climb_count if 'export_climb_count' in dir() else 0,
+                            }
 
                             # Search for error log file in output directory
                             # Error files use different naming patterns, so search broadly
@@ -20546,29 +20705,33 @@ def main():
                                 )
 
                                 print_header("Uploading to Cloud Cache", spacing_before=2)
-                                print_info("Creating pull request with your analysis...", indent=0)
+                                print_info("Creating GitHub release with your analysis...", indent=0)
 
                                 # Load datasets_used from persistence if available
                                 datasets_used = None
                                 if persistence:
                                     datasets_used = persistence.load_datasets_used()
 
-                                pr_url = cloud_cache.upload_to_staging(
-                                    country_name, region_name, output_files, scope_type, datasets_used
+                                release_url = cloud_cache.upload_to_release(
+                                    country_name, region_name, output_files, scope_type, datasets_used,
+                                    climb_count=output_files.get("climb_count", 0)
                                 )
 
-                                if pr_url:
+                                if release_url:
                                     total_mb = (
                                         sum(f.stat().st_size for f in output_files["xlsx"])
                                         / 1024**2
                                     )
-                                    if output_files["csv"]:
+                                    # Add SQLite files to total
+                                    if output_files.get("sqlite"):
+                                        total_mb += sum(f.stat().st_size for f in output_files["sqlite"]) / 1024**2
+                                    if output_files.get("csv"):
                                         total_mb += output_files["csv"].stat().st_size / 1024**2
 
                                     print_header(
-                                        "Pull Request Created Successfully", spacing_before=2
+                                        "PR Created for Review", spacing_before=2
                                     )
-                                    print_success(f"PR URL: {pr_url}")
+                                    print_success(f"PR/Release URL: {release_url}")
                                     print_success(
                                         f"Total uploaded: {total_mb:.1f} MB across {file_count} files"
                                     )

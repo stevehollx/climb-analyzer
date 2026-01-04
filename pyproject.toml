@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "climb-analyzer"
-version = "2.2.3"
+version = "2.4.0"
 description = "Analyze road and trail climbs from OpenStreetMap data"
 readme = "README.md"
 requires-python = ">=3.9"
