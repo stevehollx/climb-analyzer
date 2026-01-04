@@ -2373,11 +2373,12 @@ class NEDDownloader(BaseDEMDownloader):
                     error_count += 1
                 main_pbar.update(1)
 
-        # Safety check: if >50% of tiles returned 404, likely a systemic issue (server down)
-        # Roll back the unavailable marks to prevent false positives
-        if tiles_to_download and not_found_count > len(tiles_to_download) * 0.5:
+        # Safety check: only rollback unavailable marks if ALL tiles failed
+        # (If some succeeded, server is working and 404s are genuine ocean tiles)
+        # This handles island regions like Hawaii where >95% of tiles are ocean
+        if tiles_to_download and success_count == 0 and not_found_count > 0:
             if tiles_marked_unavailable:
-                print("\n⚠️  >50% of tiles returned 404 - possible server or network issue")
+                print("\n⚠️  All tiles returned 404 - possible server or network issue")
                 print("  Clearing unavailable marks to prevent false positives")
                 self._clear_unavailable_tiles(tiles_marked_unavailable)
 
@@ -2616,11 +2617,12 @@ class SRTMDownloader(BaseDEMDownloader):
                 main_pbar.update(1)
                 time.sleep(0.3)  # Rate limiting (reduced - public S3 is faster)
 
-        # Safety check: if >50% of tiles returned 404, likely a systemic issue (server down)
-        # Roll back the unavailable marks to prevent false positives
-        if tiles_to_download and not_found_count > len(tiles_to_download) * 0.5:
+        # Safety check: only rollback unavailable marks if ALL tiles failed
+        # (If some succeeded, server is working and 404s are genuine ocean tiles)
+        # This handles island regions like Hawaii where >95% of tiles are ocean
+        if tiles_to_download and success_count == 0 and not_found_count > 0:
             if tiles_marked_unavailable:
-                print("\n⚠️  >50% of tiles returned 404 - possible server issue")
+                print("\n⚠️  All tiles returned 404 - possible server issue")
                 print("  Clearing unavailable marks to prevent false positives")
                 # Remove the tiles we just marked from the unavailable file
                 self._clear_unavailable_tiles(tiles_marked_unavailable)

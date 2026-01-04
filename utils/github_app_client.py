@@ -501,6 +501,73 @@ class GitHubAppClient:
             print(f"⚠️  Network error creating branch: {e}")
             return False
 
+    def commit_file(
+        self,
+        branch_name: str,
+        file_path: str,
+        content: str,
+        commit_message: str,
+    ) -> bool:
+        """
+        Create or update a file in the repository on a specific branch.
+
+        Uses GitHub Contents API: PUT /repos/{owner}/{repo}/contents/{path}
+
+        Args:
+            branch_name: Branch to commit to
+            file_path: Path to file in repo (e.g., "releases/hawaii.md")
+            content: File content (will be base64 encoded)
+            commit_message: Commit message
+
+        Returns:
+            True if successful, False otherwise
+        """
+        import base64
+
+        headers = self._get_headers()
+        if not headers:
+            return False
+
+        url = f"{self.base_url}/repos/{self.owner}/{self.repo}/contents/{file_path}"
+
+        # Check if file already exists to get its SHA (required for updates)
+        existing_sha = None
+        try:
+            response = requests.get(
+                url,
+                headers=headers,
+                params={"ref": branch_name},
+                timeout=30
+            )
+            if response.status_code == 200:
+                existing_sha = response.json().get("sha")
+        except requests.exceptions.RequestException:
+            pass  # File doesn't exist, which is fine for creation
+
+        # Prepare request data
+        data = {
+            "message": commit_message,
+            "content": base64.b64encode(content.encode()).decode(),
+            "branch": branch_name,
+        }
+
+        if existing_sha:
+            data["sha"] = existing_sha
+
+        try:
+            response = requests.put(url, headers=headers, json=data, timeout=60)
+
+            if response.status_code in (200, 201):
+                return True
+            else:
+                print(f"⚠️  Failed to commit file: HTTP {response.status_code}")
+                print(f"   Response: {response.text[:300]}")
+                return False
+
+        except requests.exceptions.RequestException as e:
+            print(f"⚠️  Network error committing file: {e}")
+            return False
+
     def create_pull_request(self, title: str, body: str, head_branch: str,
                            base_branch: str = "main") -> Optional[str]:
         """
@@ -774,3 +841,352 @@ class GitHubAppClient:
                 shutil.rmtree(temp_dir)
             except Exception:
                 pass
+
+    # ============================================================================
+    # GitHub Releases API Methods
+    # ============================================================================
+
+    def create_release(
+        self,
+        tag_name: str,
+        name: str,
+        body: str,
+        draft: bool = False,
+        prerelease: bool = False,
+        target_commitish: str = "main"
+    ) -> Optional[Dict]:
+        """
+        Create a new GitHub release.
+
+        Args:
+            tag_name: Tag for the release (e.g., "california-v2.2.0")
+            name: Release title
+            body: Release description (markdown)
+            draft: Whether this is a draft release
+            prerelease: Whether this is a pre-release
+            target_commitish: Branch or commit SHA
+
+        Returns:
+            Release data dict with 'id', 'upload_url', 'html_url' or None on failure
+        """
+        headers = self._get_headers()
+        if not headers:
+            return None
+
+        url = f"{self.base_url}/repos/{self.owner}/{self.repo}/releases"
+
+        data = {
+            "tag_name": tag_name,
+            "name": name,
+            "body": body,
+            "draft": draft,
+            "prerelease": prerelease,
+            "target_commitish": target_commitish,
+        }
+
+        try:
+            response = requests.post(url, headers=headers, json=data, timeout=60)
+
+            if response.status_code == 201:
+                return response.json()
+            else:
+                print(f"⚠️  Failed to create release: HTTP {response.status_code}")
+                print(f"   Response: {response.text[:500]}")
+                return None
+
+        except requests.exceptions.RequestException as e:
+            print(f"⚠️  Network error creating release: {e}")
+            return None
+
+    def get_release_by_tag(self, tag_name: str) -> Optional[Dict]:
+        """
+        Get an existing release by its tag name.
+
+        Args:
+            tag_name: Tag to look up (e.g., "california-v2.2.0")
+
+        Returns:
+            Release data dict or None if not found
+        """
+        headers = self._get_headers()
+        if not headers:
+            return None
+
+        url = f"{self.base_url}/repos/{self.owner}/{self.repo}/releases/tags/{tag_name}"
+
+        try:
+            response = requests.get(url, headers=headers, timeout=30)
+
+            if response.status_code == 200:
+                return response.json()
+            elif response.status_code == 404:
+                return None  # Release doesn't exist
+            else:
+                print(f"⚠️  Failed to get release by tag: HTTP {response.status_code}")
+                return None
+
+        except requests.exceptions.RequestException as e:
+            print(f"⚠️  Network error getting release: {e}")
+            return None
+
+    def get_release_by_id(self, release_id: int) -> Optional[Dict]:
+        """
+        Get release info by ID (works for draft releases).
+
+        Args:
+            release_id: Release ID
+
+        Returns:
+            Release data dict or None if not found
+        """
+        headers = self._get_headers()
+        if not headers:
+            return None
+
+        url = f"{self.base_url}/repos/{self.owner}/{self.repo}/releases/{release_id}"
+
+        try:
+            response = requests.get(url, headers=headers, timeout=30)
+
+            if response.status_code == 200:
+                return response.json()
+            else:
+                print(f"⚠️  Failed to get release by ID: HTTP {response.status_code}")
+                return None
+
+        except requests.exceptions.RequestException as e:
+            print(f"⚠️  Network error getting release: {e}")
+            return None
+
+    def list_releases(self, per_page: int = 100) -> List[Dict]:
+        """
+        List all releases in the repository.
+
+        Args:
+            per_page: Number of releases per page (max 100)
+
+        Returns:
+            List of release data dicts
+        """
+        headers = self._get_headers()
+        if not headers:
+            return []
+
+        releases = []
+        page = 1
+
+        while True:
+            url = f"{self.base_url}/repos/{self.owner}/{self.repo}/releases"
+            params = {"per_page": per_page, "page": page}
+
+            try:
+                response = requests.get(url, headers=headers, params=params, timeout=60)
+
+                if response.status_code == 200:
+                    page_releases = response.json()
+                    if not page_releases:
+                        break
+                    releases.extend(page_releases)
+                    if len(page_releases) < per_page:
+                        break
+                    page += 1
+                else:
+                    print(f"⚠️  Failed to list releases: HTTP {response.status_code}")
+                    break
+
+            except requests.exceptions.RequestException as e:
+                print(f"⚠️  Network error listing releases: {e}")
+                break
+
+        return releases
+
+    def upload_release_asset(
+        self,
+        release_id: int,
+        upload_url: str,
+        local_file: Path,
+        content_type: str = "application/octet-stream"
+    ) -> Optional[Dict]:
+        """
+        Upload an asset to a GitHub release.
+
+        Uses the uploads.github.com endpoint (different from api.github.com).
+        Handles large files via streaming upload.
+
+        Args:
+            release_id: ID of the release
+            upload_url: Upload URL from release creation (includes {?name,label})
+            local_file: Path to the file to upload
+            content_type: MIME type of the file
+
+        Returns:
+            Asset data dict with 'browser_download_url' or None on failure
+        """
+        headers = self._get_headers()
+        if not headers:
+            return None
+
+        # The upload_url contains a template like:
+        # https://uploads.github.com/repos/owner/repo/releases/123/assets{?name,label}
+        # We need to strip the template part and add the filename as a query param
+        base_url = upload_url.split("{")[0]
+        url = f"{base_url}?name={local_file.name}"
+
+        # Set content type for the file
+        headers["Content-Type"] = content_type
+
+        try:
+            file_size = local_file.stat().st_size
+            file_size_mb = file_size / (1024 ** 2)
+
+            print(f"    Uploading {local_file.name} ({file_size_mb:.1f} MB)...")
+
+            # Stream upload for large files
+            with open(local_file, "rb") as f:
+                response = requests.post(
+                    url,
+                    headers=headers,
+                    data=f,
+                    timeout=600  # 10 minute timeout for large files
+                )
+
+            if response.status_code == 201:
+                asset_data = response.json()
+                print(f"    ✓ Uploaded {local_file.name}")
+                return asset_data
+            else:
+                print(f"⚠️  Failed to upload asset: HTTP {response.status_code}")
+                print(f"   Response: {response.text[:500]}")
+                return None
+
+        except requests.exceptions.RequestException as e:
+            print(f"⚠️  Network error uploading asset: {e}")
+            return None
+
+    def list_release_assets(self, release_id: int) -> List[Dict]:
+        """
+        List all assets attached to a release.
+
+        Args:
+            release_id: ID of the release
+
+        Returns:
+            List of asset data dicts
+        """
+        headers = self._get_headers()
+        if not headers:
+            return []
+
+        url = f"{self.base_url}/repos/{self.owner}/{self.repo}/releases/{release_id}/assets"
+
+        try:
+            response = requests.get(url, headers=headers, timeout=30)
+
+            if response.status_code == 200:
+                return response.json()
+            else:
+                print(f"⚠️  Failed to list release assets: HTTP {response.status_code}")
+                return []
+
+        except requests.exceptions.RequestException as e:
+            print(f"⚠️  Network error listing assets: {e}")
+            return []
+
+    def delete_release_asset(self, asset_id: int) -> bool:
+        """
+        Delete a specific release asset.
+
+        Args:
+            asset_id: ID of the asset to delete
+
+        Returns:
+            True if successful, False otherwise
+        """
+        headers = self._get_headers()
+        if not headers:
+            return False
+
+        url = f"{self.base_url}/repos/{self.owner}/{self.repo}/releases/assets/{asset_id}"
+
+        try:
+            response = requests.delete(url, headers=headers, timeout=30)
+            return response.status_code == 204
+
+        except requests.exceptions.RequestException:
+            return False
+
+    def delete_release(self, release_id: int) -> bool:
+        """
+        Delete a release.
+
+        Args:
+            release_id: ID of the release to delete
+
+        Returns:
+            True if successful, False otherwise
+        """
+        headers = self._get_headers()
+        if not headers:
+            return False
+
+        url = f"{self.base_url}/repos/{self.owner}/{self.repo}/releases/{release_id}"
+
+        try:
+            response = requests.delete(url, headers=headers, timeout=30)
+            return response.status_code == 204
+
+        except requests.exceptions.RequestException:
+            return False
+
+    def update_release(
+        self,
+        release_id: int,
+        name: Optional[str] = None,
+        body: Optional[str] = None,
+        draft: Optional[bool] = None,
+        prerelease: Optional[bool] = None
+    ) -> Optional[Dict]:
+        """
+        Update an existing release.
+
+        Args:
+            release_id: ID of the release to update
+            name: New release title (optional)
+            body: New release description (optional)
+            draft: New draft status (optional)
+            prerelease: New prerelease status (optional)
+
+        Returns:
+            Updated release data dict or None on failure
+        """
+        headers = self._get_headers()
+        if not headers:
+            return None
+
+        url = f"{self.base_url}/repos/{self.owner}/{self.repo}/releases/{release_id}"
+
+        data = {}
+        if name is not None:
+            data["name"] = name
+        if body is not None:
+            data["body"] = body
+        if draft is not None:
+            data["draft"] = draft
+        if prerelease is not None:
+            data["prerelease"] = prerelease
+
+        if not data:
+            return None  # Nothing to update
+
+        try:
+            response = requests.patch(url, headers=headers, json=data, timeout=30)
+
+            if response.status_code == 200:
+                return response.json()
+            else:
+                print(f"⚠️  Failed to update release: HTTP {response.status_code}")
+                return None
+
+        except requests.exceptions.RequestException as e:
+            print(f"⚠️  Network error updating release: {e}")
+            return None

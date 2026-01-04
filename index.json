@@ -1,52 +1,40 @@
 {
-  "version": "1.0.0",
-  "generated_at": "2025-12-15T18:08:34.628257Z",
+  "version": "2.0.0",
+  "generated_at": "2026-01-03T18:07:06.175130Z",
   "repository": "stevehollx/global-road-and-trail-climbs",
   "summary": {
-    "total_regions": 3,
-    "total_files": 4,
-    "regions_with_split_files": 2,
-    "by_continent": {
-      "europe": 1,
-      "output": 1,
-      "north-america": 1
-    }
+    "total_regions": 1,
+    "total_xlsx_files": 1,
+    "total_sqlite_files": 1,
+    "total_xlsx_size_bytes": 15166008,
+    "total_sqlite_size_bytes": 33030144,
+    "total_size_mb": 46.0,
+    "total_climbs": 83237
   },
   "regions": {
-    "europe/united-kingdom/england/bristol": {
-      "region_name": "england__bristol",
-      "files": [
-        "england__bristol_climbs_all_basic_2025-12-13_v2.1.0_e0000.xlsx"
-      ],
-      "download_urls": [
-        "https://raw.githubusercontent.com/stevehollx/global-road-and-trail-climbs/main/europe/united-kingdom/england/bristol/england__bristol_climbs_all_basic_2025-12-13_v2.1.0_e0000.xlsx"
-      ],
-      "file_count": 1,
-      "has_split_files": false
-    },
-    "output": {
-      "region_name": "north_carolina",
-      "files": [
-        "north_carolina_climbs_all_basic_2025-12-13_v2.2.0_e0000-1.xlsx"
-      ],
-      "download_urls": [
-        "https://raw.githubusercontent.com/stevehollx/global-road-and-trail-climbs/main/output/north_carolina_climbs_all_basic_2025-12-13_v2.2.0_e0000-1.xlsx"
-      ],
-      "file_count": 1,
-      "has_split_files": true
-    },
-    "north-america/united-states-of-america/new-york": {
-      "region_name": "New_York",
-      "files": [
-        "New_York_climbs_all_basic_2025-12-11_v2.1.0_e0000-1.xlsx",
-        "New_York_climbs_all_basic_2025-12-11_v2.1.0_e0000-2.xlsx"
-      ],
-      "download_urls": [
-        "https://raw.githubusercontent.com/stevehollx/global-road-and-trail-climbs/main/north-america/united-states-of-america/new-york/New_York_climbs_all_basic_2025-12-11_v2.1.0_e0000-1.xlsx",
-        "https://raw.githubusercontent.com/stevehollx/global-road-and-trail-climbs/main/north-america/united-states-of-america/new-york/New_York_climbs_all_basic_2025-12-11_v2.1.0_e0000-2.xlsx"
-      ],
-      "file_count": 2,
-      "has_split_files": true
+    "hawaii": {
+      "region_name": "Hawaii",
+      "version": "2.3.0",
+      "release_tag": "hawaii-v2.3.0",
+      "release_url": "https://github.com/stevehollx/global-road-and-trail-climbs/releases/tag/hawaii-v2.3.0",
+      "climb_count": 83237,
+      "elevation_errors": 0,
+      "xlsx": {
+        "files": [
+          "Hawaii_climbs_all-surfaces_all-access_imperial_2026-01-03_v2.3.0_e0000.xlsx"
+        ],
+        "download_urls": [
+          "https://github.com/stevehollx/global-road-and-trail-climbs/releases/download/hawaii-v2.3.0/Hawaii_climbs_all-surfaces_all-access_imperial_2026-01-03_v2.3.0_e0000.xlsx"
+        ],
+        "file_sizes": [
+          15166008
+        ],
+        "total_size": 15166008
+      },
+      "database_file": "Hawaii_climbs_all-surfaces_all-access_imperial_2026-01-03_v2.3.0_e0000.sqlite",
+      "database_size": 33030144,
+      "database_url": "https://github.com/stevehollx/global-road-and-trail-climbs/releases/download/hawaii-v2.3.0/Hawaii_climbs_all-surfaces_all-access_imperial_2026-01-03_v2.3.0_e0000.sqlite",
+      "published_at": "2026-01-03T18:04:19Z"
     }
   }
 }

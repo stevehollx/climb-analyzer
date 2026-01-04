@@ -52,8 +52,9 @@ def get_required_datasets(
     # Detect region type
     is_arctic = lat_min > 60 or lat_max > 60  # Full or partial Arctic coverage
 
-    # US bounds: roughly 18°N to 72°N, -180°W to -60°W
-    is_us_region = (lat_min >= 18 and lat_max <= 72 and
+    # US bounds: roughly 15°N to 72°N, -180°W to -60°W
+    # Note: 15°N threshold includes Hawaii (extends to 15.92°N)
+    is_us_region = (lat_min >= 15 and lat_max <= 72 and
                     lon_min >= -180 and lon_max <= -60)
 
     # Alaska detection: US region with high latitude

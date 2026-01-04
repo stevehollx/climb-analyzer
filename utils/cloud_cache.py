@@ -1022,3 +1022,357 @@ class CloudCacheManager:
             # Cleanup: delete branch
             self.github.delete_branch(branch_name)
             return None
+
+    def upload_to_release(
+        self,
+        country: str,
+        region: Optional[str],
+        local_files: Dict,
+        scope_type: str,
+        datasets_used: Optional[List[str]] = None,
+        climb_count: int = 0,
+    ) -> Optional[str]:
+        """
+        Upload analysis files to a GitHub Release (replaces LFS-based upload).
+
+        Creates a per-region release with XLSX and SQLite files as release assets.
+        If a release already exists for this region, updates it by replacing assets.
+
+        Args:
+            country: Country name
+            region: Region/state name (for USA states)
+            local_files: Dict with 'xlsx' (list of paths), 'sqlite' (list of paths), 'csv' (error log path or None)
+            scope_type: Type of analysis
+            datasets_used: List of elevation datasets used
+            climb_count: Number of climbs in the analysis
+
+        Returns:
+            Release URL if successful, None otherwise
+        """
+        # Get app version
+        try:
+            from __version__ import __version__ as app_version
+        except ImportError:
+            app_version = "2.2.0"
+
+        # Determine location name for release tag
+        location_name = region if scope_type == "region" else country
+
+        # Check if we have files to upload
+        xlsx_files = local_files.get("xlsx", [])
+        sqlite_files = local_files.get("sqlite", [])
+
+        if not xlsx_files and not sqlite_files:
+            print("  ✗ No files to upload")
+            return None
+
+        # Generate release tag (per-region, e.g., "hawaii-v2.2.0")
+        sanitized_name = self.sanitize_name(location_name).lower()
+        release_tag = f"{sanitized_name}-v{app_version}"
+
+        print(f"\n  Checking for existing release: {release_tag}")
+
+        # Check for existing release
+        existing_release = self.github.get_release_by_tag(release_tag)
+
+        if existing_release:
+            print(f"  ✓ Found existing release - will update assets")
+            release_id = existing_release["id"]
+            upload_url = existing_release["upload_url"]
+
+            # Delete old assets to replace with new ones
+            existing_assets = self.github.list_release_assets(release_id)
+            if existing_assets:
+                print(f"    Removing {len(existing_assets)} existing assets...")
+                for asset in existing_assets:
+                    self.github.delete_release_asset(asset["id"])
+        else:
+            # Create new release
+            print(f"  Creating release: {release_tag}")
+
+            # Parse version and error count from first xlsx file
+            if xlsx_files:
+                local_version, local_errors = self.parse_version_and_errors(xlsx_files[0].name)
+            else:
+                local_version, local_errors = app_version, 0
+
+            # Build release body
+            date_str = datetime.now().strftime("%Y-%m-%d")
+
+            # Calculate total size
+            total_xlsx_size = sum(f.stat().st_size for f in xlsx_files) if xlsx_files else 0
+            total_sqlite_size = sum(f.stat().st_size for f in sqlite_files) if sqlite_files else 0
+            total_size_mb = (total_xlsx_size + total_sqlite_size) / (1024 ** 2)
+
+            release_body = f"""## {location_name} Climb Analysis
+
+**Date:** {date_str}
+**Version:** {local_version}
+**Elevation Errors:** {local_errors if local_errors is not None else 0}
+**Climb Count:** {climb_count:,}
+
+### Files
+
+| File | Size | Format |
+|------|------|--------|
+"""
+            for f in xlsx_files:
+                size_mb = f.stat().st_size / (1024 ** 2)
+                release_body += f"| {f.name} | {size_mb:.1f} MB | Excel |\n"
+
+            for f in sqlite_files:
+                size_mb = f.stat().st_size / (1024 ** 2)
+                release_body += f"| {f.name} | {size_mb:.1f} MB | SQLite |\n"
+
+            if local_files.get("csv"):
+                csv_size = local_files["csv"].stat().st_size / (1024 ** 2)
+                release_body += f"| {local_files['csv'].name} | {csv_size:.2f} MB | Error Log |\n"
+
+            release_body += f"""
+**Total Size:** {total_size_mb:.1f} MB
+
+### Download
+
+- **Excel files**: For viewing in spreadsheet applications
+- **SQLite database**: For iOS app import via `ATTACH DATABASE`
+
+### Analysis Parameters
+
+- Surface Filter: all roads
+- Minimum Score: 0
+- Score Type: basic
+- Cycling Filter: off
+"""
+
+            # Add elevation datasets if available
+            if not datasets_used:
+                datasets_used = self.load_datasets_used_from_checkpoint(location_name)
+
+            if datasets_used:
+                release_body += "\n### Elevation Datasets Used (priority order)\n\n"
+                for i, ds in enumerate(datasets_used, 1):
+                    release_body += f"{i}. {ds}\n"
+
+            release_body += "\n---\n\nGenerated by [Climb Analyzer](https://github.com/stevehollx/climb-analyzer)"
+
+            # Create DRAFT release (requires PR approval to publish)
+            release = self.github.create_release(
+                tag_name=release_tag,
+                name=f"{location_name} Climb Analysis v{app_version}",
+                body=release_body,
+                draft=True,  # Draft until PR is approved
+                prerelease=False,
+            )
+
+            if not release:
+                print("  ✗ Failed to create release")
+                return None
+
+            release_id = release["id"]
+            upload_url = release["upload_url"]
+            print(f"  ✓ Created release: {release['html_url']}")
+
+        # Upload all files as release assets
+        print(f"\n  Uploading files to release...")
+
+        all_files = []
+        all_files.extend(xlsx_files)
+        all_files.extend(sqlite_files)
+        if local_files.get("csv"):
+            all_files.append(local_files["csv"])
+
+        uploaded_count = 0
+        for local_file in all_files:
+            # Determine content type
+            if local_file.suffix == ".xlsx":
+                content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            elif local_file.suffix == ".sqlite":
+                content_type = "application/x-sqlite3"
+            else:
+                content_type = "text/plain"
+
+            asset = self.github.upload_release_asset(
+                release_id=release_id,
+                upload_url=upload_url,
+                local_file=local_file,
+                content_type=content_type,
+            )
+
+            if asset:
+                uploaded_count += 1
+            else:
+                print(f"    ⚠️  Failed to upload {local_file.name}")
+
+        if uploaded_count == len(all_files):
+            print(f"  ✓ Successfully uploaded {uploaded_count} files to release (draft)")
+
+            # Get release info by ID (draft releases don't have tags until published)
+            release_info = self.github.get_release_by_id(release_id)
+            if release_info:
+                # Build markdown file content
+                md_content = self._build_release_markdown(
+                    location_name=location_name,
+                    version=app_version,
+                    climb_count=climb_count,
+                    release_tag=release_tag,
+                    release_url=release_info["html_url"],
+                    assets=release_info.get("assets", []),
+                    datasets_used=datasets_used,
+                    elevation_errors=local_errors if local_errors is not None else 0,
+                )
+
+                # Create PR with markdown file
+                pr_url = self._create_release_pr(
+                    location_name=location_name,
+                    md_content=md_content,
+                    release_tag=release_tag,
+                    country=country,
+                    scope_type=scope_type,
+                )
+
+                if pr_url:
+                    print(f"  ✓ Created PR for release approval: {pr_url}")
+                    return pr_url
+        else:
+            print(f"  ⚠️  Uploaded {uploaded_count}/{len(all_files)} files")
+
+        # Fallback: return release URL if PR creation failed
+        release_url = f"https://github.com/{self.github.owner}/{self.github.repo}/releases/tag/{release_tag}"
+        return release_url
+
+    def _build_release_markdown(
+        self,
+        location_name: str,
+        version: str,
+        climb_count: int,
+        release_tag: str,
+        release_url: str,
+        assets: List[Dict],
+        datasets_used: Optional[List[str]] = None,
+        elevation_errors: int = 0,
+    ) -> str:
+        """Build markdown content for the release PR in user-preferred format."""
+        date_str = datetime.now().strftime("%Y-%m-%d")
+
+        # Calculate file counts and total size
+        xlsx_count = sum(1 for a in assets if a.get("name", "").endswith(".xlsx"))
+        sqlite_count = sum(1 for a in assets if a.get("name", "").endswith(".sqlite"))
+        log_count = sum(1 for a in assets if "error" in a.get("name", "").lower() or a.get("name", "").endswith(".log"))
+        total_size_bytes = sum(a.get("size", 0) for a in assets)
+        total_size_mb = total_size_bytes / (1024 ** 2)
+
+        # Build files description
+        file_parts = []
+        if xlsx_count > 0:
+            file_parts.append(f"{xlsx_count} Excel file(s)")
+        if sqlite_count > 0:
+            file_parts.append(f"{sqlite_count} SQLite database(s)")
+        if log_count > 0:
+            file_parts.append("error log")
+        files_desc = " + ".join(file_parts) if file_parts else "No files"
+
+        # Start building markdown
+        md = f"""## Info
+* Date: {date_str}
+* Version: {version}
+* Elevation Errors: {elevation_errors}
+* Climbs: {climb_count:,}
+* Files: {files_desc}
+* Total Size: {total_size_mb:.1f} MB
+* Release Tag: `{release_tag}`
+
+"""
+
+        # Elevation datasets section
+        if datasets_used:
+            md += "## Elevation datasets used:\n"
+            for i, dataset in enumerate(datasets_used, 1):
+                md += f"{i}. {dataset}\n"
+            md += "\n"
+
+        # Files table
+        md += """## Files
+
+| File | Size | Format |
+|------|------|--------|
+"""
+        for asset in assets:
+            name = asset.get("name", "")
+            size_bytes = asset.get("size", 0)
+            size_mb = size_bytes / (1024 ** 2)
+            download_url = asset.get("browser_download_url", "")
+
+            if name.endswith(".xlsx"):
+                fmt = "Excel"
+            elif name.endswith(".sqlite"):
+                fmt = "SQLite"
+            elif name.endswith(".log") or "error" in name.lower():
+                fmt = "Log"
+            else:
+                fmt = "Other"
+
+            md += f"| [{name}]({download_url}) | {size_mb:.1f} MB | {fmt} |\n"
+
+        md += f"""
+## Release
+
+[View Release]({release_url})
+
+---
+
+*This README was automatically generated by Climb Analyzer.*
+*Merging this PR will publish the draft release and update the index.*
+"""
+        return md
+
+    def _create_release_pr(
+        self,
+        location_name: str,
+        md_content: str,
+        release_tag: str,
+        country: str = "",
+        scope_type: str = "",
+    ) -> Optional[str]:
+        """Create a PR with the release markdown file."""
+        # Sanitize location name for filename
+        sanitized_name = self.sanitize_name(location_name).lower()
+
+        # Use geographic path for US states, otherwise use releases folder
+        if scope_type == "region" and country.lower() in ["usa", "united states", "united states of america"]:
+            md_filename = f"north-america/united-states-of-america/{sanitized_name}/README.md"
+        else:
+            md_filename = f"releases/{sanitized_name}.md"
+
+        # Create unique branch name
+        timestamp = int(datetime.now().timestamp())
+        branch_name = f"release/{sanitized_name}-{timestamp}"
+
+        print(f"    Creating branch: {branch_name}")
+
+        # Create branch
+        if not self.github.create_branch(branch_name):
+            print(f"    ⚠️  Failed to create branch {branch_name}")
+            return None
+
+        # Commit markdown file to branch
+        commit_message = f"Add release info for {location_name}"
+        if not self.github.commit_file(
+            branch_name=branch_name,
+            file_path=md_filename,
+            content=md_content,
+            commit_message=commit_message,
+        ):
+            print(f"    ⚠️  Failed to commit {md_filename}")
+            self.github.delete_branch(branch_name)
+            return None
+
+        # Create PR - use the same content as the release README
+        pr_title = f"Release: {location_name} Climb Analysis"
+        pr_url = self.github.create_pull_request(pr_title, md_content, branch_name)
+
+        if not pr_url:
+            print(f"    ⚠️  Failed to create PR")
+            self.github.delete_branch(branch_name)
+            return None
+
+        return pr_url
