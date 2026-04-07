@@ -250,6 +250,124 @@ def extract_elevation_errors_from_release_body(body: str) -> Optional[int]:
     return None
 
 
+def _partition_id_to_display_name(partition_id: str) -> str:
+    """
+    Convert a partition ID to a human-readable display name.
+
+    Examples:
+        norcal -> Northern California
+        socal -> Southern California
+        northeast -> Northeast
+        ne_sw -> Southern Northeast
+        other -> Other Regions
+    """
+    # Map of known partition IDs to display names
+    display_names = {
+        # Geofabrik-style
+        "norcal": "Northern California",
+        "socal": "Southern California",
+        "north": "North",
+        "south": "South",
+        "east": "East",
+        "west": "West",
+        # Quadtree-style (full names)
+        "northeast": "Northeast",
+        "northwest": "Northwest",
+        "southeast": "Southeast",
+        "southwest": "Southwest",
+        # Quadtree-style (abbreviated)
+        "ne": "Northeast",
+        "nw": "Northwest",
+        "se": "Southeast",
+        "sw": "Southwest",
+        # Catch-all
+        "other": "Other Regions",
+    }
+
+    if partition_id in display_names:
+        return display_names[partition_id]
+
+    # Handle nested quadtree patterns (e.g., ne_sw, northeast_se)
+    if "_" in partition_id:
+        parts = partition_id.split("_")
+        if len(parts) == 2:
+            outer = display_names.get(parts[0], parts[0].title())
+            inner = parts[1].upper() if len(parts[1]) <= 2 else parts[1].title()
+
+            # Generate directional prefix
+            inner_map = {"ne": "Eastern", "nw": "Western", "se": "Eastern", "sw": "Western",
+                        "northeast": "Eastern", "northwest": "Western",
+                        "southeast": "Eastern", "southwest": "Western"}
+            prefix = inner_map.get(parts[1], "")
+            if not prefix:
+                if "north" in parts[1]:
+                    prefix = "Northern"
+                elif "south" in parts[1]:
+                    prefix = "Southern"
+                else:
+                    prefix = parts[1].title()
+            return f"{prefix} {outer}"
+
+    # Fallback: title case the ID
+    return partition_id.replace("_", " ").title()
+
+
+def fetch_checksums(sha256_url: str, token: Optional[str] = None) -> Dict[str, str]:
+    """
+    Fetch and parse .sha256 checksum file from release assets.
+
+    Args:
+        sha256_url: URL to the .sha256 file
+        token: Optional GitHub token for authentication
+
+    Returns:
+        Dict mapping filename to SHA256 checksum
+    """
+    headers = {"Accept": "application/octet-stream"}
+    if token:
+        headers["Authorization"] = f"token {token}"
+
+    try:
+        response = requests.get(sha256_url, headers=headers, timeout=30)
+        if response.status_code == 200:
+            checksums = {}
+            for line in response.text.strip().split('\n'):
+                # Standard format: "sha256hash  filename" (two spaces)
+                parts = line.split('  ')
+                if len(parts) == 2:
+                    checksums[parts[1].strip()] = parts[0].strip()
+            return checksums
+    except requests.exceptions.RequestException as e:
+        print(f"Warning: Failed to fetch checksums from {sha256_url}: {e}")
+
+    return {}
+
+
+def fetch_partition_metadata(metadata_url: str, token: Optional[str] = None) -> Dict:
+    """
+    Fetch partition metadata JSON from release asset.
+
+    Args:
+        metadata_url: URL to .sqlite.metadata.json file
+        token: Optional GitHub token for authentication
+
+    Returns:
+        Parsed metadata dict or empty dict on error
+    """
+    headers = {"Accept": "application/octet-stream"}
+    if token:
+        headers["Authorization"] = f"token {token}"
+
+    try:
+        response = requests.get(metadata_url, headers=headers, timeout=30)
+        if response.status_code == 200:
+            return json.loads(response.text)
+    except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
+        print(f"  Warning: Could not fetch partition metadata: {e}")
+
+    return {}
+
+
 def fetch_releases(owner: str, repo: str, token: Optional[str] = None) -> List[Dict]:
     """
     Fetch all releases from a GitHub repository.
@@ -332,7 +450,37 @@ def scan_releases(owner: str, repo: str, token: Optional[str] = None) -> Dict[st
         sqlite_size = 0
         sqlite_url = None
 
+        # Split SQLite detection (binary chunks: .001, .002, etc.)
+        sqlite_split_files = []
+        sqlite_split_sizes = []
+        sqlite_split_urls = []
+        sha256_url = None
+
+        # Partitioned SQLite detection (geographic partitions: _norcal, _socal, _northeast, etc.)
+        sqlite_partition_files = []
+        sqlite_partition_sizes = []
+        sqlite_partition_urls = []
+        sqlite_partition_ids = []
+        partition_metadata_urls = {}  # partition_id -> metadata_url
+
         region_name = None  # Will be extracted from filename
+
+        # Known partition ID patterns (from Geofabrik and Quadtree)
+        partition_patterns = [
+            # Geofabrik-based
+            "norcal", "socal", "north", "south", "east", "west",
+            # Quadtree-based
+            "northeast", "northwest", "southeast", "southwest",
+            "ne", "nw", "se", "sw",
+            # Nested quadtree (e.g., ne_sw, southwest_ne)
+            r"[ns][ew]_[ns][ew]",
+            r"(northeast|northwest|southeast|southwest)_[ns][ew]",
+            # "other" catch-all
+            "other",
+        ]
+        partition_regex = re.compile(
+            r'_(' + '|'.join(partition_patterns) + r')\.sqlite$', re.IGNORECASE
+        )
 
         for asset in assets:
             name = asset.get("name", "")
@@ -348,17 +496,62 @@ def scan_releases(owner: str, repo: str, token: Optional[str] = None) -> Dict[st
                 if not region_name:
                     region_name = extract_region_from_filename(name)
 
-            elif name.endswith(".sqlite"):
-                sqlite_file = name
-                sqlite_size = size
-                sqlite_url = download_url
+            elif re.match(r'.*\.sqlite\.\d{3}$', name):
+                # Split SQLite chunk (.sqlite.001, .sqlite.002, etc.)
+                sqlite_split_files.append(name)
+                sqlite_split_sizes.append(size)
+                sqlite_split_urls.append(download_url)
 
                 # Extract region name from sqlite filename if not yet found
                 if not region_name:
-                    region_name = extract_region_from_filename(name)
+                    # Remove the .001 suffix to get the base name
+                    base_name = name.rsplit('.', 1)[0]  # e.g., California_climbs_....sqlite
+                    region_name = extract_region_from_filename(base_name)
+
+            elif name.endswith(".sqlite.sha256"):
+                # Checksum file for split SQLite
+                sha256_url = download_url
+
+            elif name.endswith(".sqlite.metadata.json"):
+                # Partition metadata file
+                # e.g., "California_climbs_..._norcal.sqlite.metadata.json" -> "norcal"
+                base = name.replace(".sqlite.metadata.json", "")
+                partition_match = partition_regex.search(base + ".sqlite")
+                if partition_match:
+                    part_id = partition_match.group(1).lower()
+                    partition_metadata_urls[part_id] = download_url
+
+            elif name.endswith(".sqlite"):
+                # Check if this is a partitioned file
+                partition_match = partition_regex.search(name)
+                if partition_match:
+                    partition_id = partition_match.group(1).lower()
+                    sqlite_partition_files.append(name)
+                    sqlite_partition_sizes.append(size)
+                    sqlite_partition_urls.append(download_url)
+                    sqlite_partition_ids.append(partition_id)
+
+                    # Extract region name from partition filename if not yet found
+                    if not region_name:
+                        # Remove the partition suffix to get base region name
+                        base_name = partition_regex.sub('.sqlite', name)
+                        region_name = extract_region_from_filename(base_name)
+                else:
+                    # Regular single SQLite file
+                    sqlite_file = name
+                    sqlite_size = size
+                    sqlite_url = download_url
+
+                    # Extract region name from sqlite filename if not yet found
+                    if not region_name:
+                        region_name = extract_region_from_filename(name)
+
+        # Determine if SQLite is split or partitioned
+        is_split_db = len(sqlite_split_files) > 0
+        is_partitioned_db = len(sqlite_partition_files) > 0
 
         # Skip if no files found
-        if not xlsx_files and not sqlite_file:
+        if not xlsx_files and not sqlite_file and not sqlite_split_files and not sqlite_partition_files:
             continue
 
         # Use tag-based region name if filename extraction failed
@@ -378,6 +571,72 @@ def scan_releases(owner: str, repo: str, token: Optional[str] = None) -> Dict[st
             xlsx_sizes = [xlsx_sizes[i] for i in sorted_indices]
             xlsx_urls = [xlsx_urls[i] for i in sorted_indices]
 
+        # Sort split SQLite files for consistent ordering (.001, .002, .003, etc.)
+        if sqlite_split_files:
+            sorted_indices = sorted(
+                range(len(sqlite_split_files)),
+                key=lambda i: sqlite_split_files[i]
+            )
+            sqlite_split_files = [sqlite_split_files[i] for i in sorted_indices]
+            sqlite_split_sizes = [sqlite_split_sizes[i] for i in sorted_indices]
+            sqlite_split_urls = [sqlite_split_urls[i] for i in sorted_indices]
+
+        # Sort partitioned SQLite files for consistent ordering (alphabetically by partition_id)
+        partitions_data = []
+        if sqlite_partition_files:
+            sorted_indices = sorted(
+                range(len(sqlite_partition_files)),
+                key=lambda i: sqlite_partition_ids[i]
+            )
+            sqlite_partition_files = [sqlite_partition_files[i] for i in sorted_indices]
+            sqlite_partition_sizes = [sqlite_partition_sizes[i] for i in sorted_indices]
+            sqlite_partition_urls = [sqlite_partition_urls[i] for i in sorted_indices]
+            sqlite_partition_ids = [sqlite_partition_ids[i] for i in sorted_indices]
+
+            # Build partition info for each partition
+            for i, partition_id in enumerate(sqlite_partition_ids):
+                # Generate display name from partition_id
+                display_name = _partition_id_to_display_name(partition_id)
+
+                # Fetch metadata if available
+                metadata = {}
+                if partition_id in partition_metadata_urls:
+                    metadata = fetch_partition_metadata(
+                        partition_metadata_urls[partition_id], token
+                    )
+
+                # Extract bounds from metadata
+                bounds_data = None
+                if metadata.get("bounds"):
+                    b = metadata["bounds"]
+                    bounds_data = {
+                        "minLat": b.get("min_lat"),
+                        "minLon": b.get("min_lon"),
+                        "maxLat": b.get("max_lat"),
+                        "maxLon": b.get("max_lon"),
+                    }
+
+                partitions_data.append({
+                    "partition_id": partition_id,
+                    "display_name": display_name,
+                    "database_file": sqlite_partition_files[i],
+                    "database_size": sqlite_partition_sizes[i],
+                    "database_url": sqlite_partition_urls[i],
+                    "database_sha256": metadata.get("sha256"),
+                    "bounds": bounds_data,
+                    "climb_count": metadata.get("climb_count"),
+                    "size_mb": metadata.get("file_size_mb") or round(sqlite_partition_sizes[i] / (1024**2), 1),
+                    "metadata_available": bool(metadata),
+                })
+
+        # Fetch checksums if split database and checksum file exists
+        split_checksums = []
+        if is_split_db and sha256_url:
+            checksums_dict = fetch_checksums(sha256_url, token)
+            # Build ordered list of checksums matching split_files order
+            for filename in sqlite_split_files:
+                split_checksums.append(checksums_dict.get(filename, ""))
+
         # Build region entry using path-based key (e.g., "north-america/us/hawaii")
         region_key = get_region_path(region_from_tag)
 
@@ -386,6 +645,16 @@ def scan_releases(owner: str, repo: str, token: Optional[str] = None) -> Dict[st
 
         # Extract last_updated date from published_at
         last_updated = published_at[:10] if published_at else None
+
+        # Determine partition type if partitioned
+        partition_type = None
+        if is_partitioned_db:
+            # Check if using Geofabrik names (norcal, socal) or Quadtree names (northeast, etc.)
+            geofabrik_ids = {"norcal", "socal", "north", "south", "east", "west"}
+            if any(pid in geofabrik_ids for pid in sqlite_partition_ids):
+                partition_type = "geofabrik"
+            else:
+                partition_type = "quadtree"
 
         # Use flattened structure for iOS compatibility
         index_data[region_key] = {
@@ -402,10 +671,21 @@ def scan_releases(owner: str, repo: str, token: Optional[str] = None) -> Dict[st
             "total_size": sum(xlsx_sizes),
             "file_count": len(xlsx_files),
             "has_split_files": has_split_files,
-            # Database fields
-            "database_file": sqlite_file,
-            "database_size": sqlite_size,
-            "database_url": sqlite_url,
+            # Database fields (for non-partitioned, non-split databases)
+            "database_file": sqlite_file if not is_split_db and not is_partitioned_db else None,
+            "database_size": sqlite_size if not is_split_db and not is_partitioned_db else None,
+            "database_url": sqlite_url if not is_split_db and not is_partitioned_db else None,
+            # Split database fields (binary chunks - iOS-expected schema)
+            "is_split": is_split_db,
+            "split_files": sqlite_split_files if is_split_db else None,
+            "split_urls": sqlite_split_urls if is_split_db else None,
+            "split_sizes": sqlite_split_sizes if is_split_db else None,
+            "split_checksums": split_checksums if is_split_db and split_checksums else None,
+            # Partitioned database fields (geographic partitions)
+            "is_partitioned": is_partitioned_db,
+            "partition_type": partition_type,
+            "partitions": partitions_data if is_partitioned_db else None,
+            "total_database_size": sum(sqlite_partition_sizes) if is_partitioned_db else None,
             # Dates
             "published_at": published_at,
             "last_updated": last_updated,
@@ -418,15 +698,38 @@ def create_summary_stats(index_data: Dict) -> Dict:
     """Create summary statistics for the index."""
     total_regions = len(index_data)
     total_xlsx_files = sum(region.get("file_count", 0) for region in index_data.values())
-    total_sqlite_files = sum(1 for region in index_data.values() if region.get("database_file"))
+
+    # Count SQLite databases (single file, split, or partitioned)
+    total_sqlite_files = 0
+    total_partitioned_regions = 0
+    for region in index_data.values():
+        if region.get("is_partitioned") and region.get("partitions"):
+            total_sqlite_files += len(region["partitions"])
+            total_partitioned_regions += 1
+        elif region.get("is_split"):
+            total_sqlite_files += 1  # Count as one logical database
+        elif region.get("database_file"):
+            total_sqlite_files += 1
+
     total_xlsx_size = sum(region.get("total_size", 0) for region in index_data.values())
-    total_sqlite_size = sum(region.get("database_size", 0) for region in index_data.values())
+
+    # Calculate SQLite size (single file, split files, or partitioned files)
+    total_sqlite_size = 0
+    for region in index_data.values():
+        if region.get("is_partitioned") and region.get("total_database_size"):
+            total_sqlite_size += region["total_database_size"]
+        elif region.get("is_split") and region.get("split_sizes"):
+            total_sqlite_size += sum(region["split_sizes"])
+        elif region.get("database_size"):
+            total_sqlite_size += region["database_size"]
+
     total_climbs = sum(region.get("climb_count") or 0 for region in index_data.values())
 
     return {
         "total_regions": total_regions,
         "total_xlsx_files": total_xlsx_files,
         "total_sqlite_files": total_sqlite_files,
+        "total_partitioned_regions": total_partitioned_regions,
         "total_xlsx_size_bytes": total_xlsx_size,
         "total_sqlite_size_bytes": total_sqlite_size,
         "total_size_mb": round((total_xlsx_size + total_sqlite_size) / (1024 * 1024), 1),
@@ -470,6 +773,8 @@ def main():
     print(f"  - Found {final_index['summary']['total_regions']} regions")
     print(f"  - Total XLSX files: {final_index['summary']['total_xlsx_files']}")
     print(f"  - Total SQLite files: {final_index['summary']['total_sqlite_files']}")
+    if final_index['summary'].get('total_partitioned_regions', 0) > 0:
+        print(f"  - Partitioned regions: {final_index['summary']['total_partitioned_regions']}")
     print(f"  - Total climbs: {final_index['summary']['total_climbs']:,}")
     print(f"  - Total size: {final_index['summary']['total_size_mb']:.1f} MB")
 
@@ -481,7 +786,11 @@ def main():
         print("\nRegions indexed:")
         for region_key, region_data in sorted(index_data.items()):
             climb_str = f"{region_data['climb_count']:,}" if region_data.get("climb_count") else "?"
-            print(f"  - {region_data['region_name']}: {climb_str} climbs, v{region_data['version']}")
+            partition_info = ""
+            if region_data.get("is_partitioned") and region_data.get("partitions"):
+                partition_count = len(region_data["partitions"])
+                partition_info = f" [{partition_count} partitions]"
+            print(f"  - {region_data['region_name']}: {climb_str} climbs, v{region_data['version']}{partition_info}")
 
 
 if __name__ == "__main__":

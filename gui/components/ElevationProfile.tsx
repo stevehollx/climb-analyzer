@@ -259,6 +259,13 @@ export function ElevationProfile({ climb, onClose, hideHeader = false, units = '
     padding: { top: number; right: number; bottom: number; left: number };
   } | null>(null);
 
+  // Zoom state - viewport defines visible range as fraction of total
+  const [zoomLevel, setZoomLevel] = useState(1);
+  const [panOffset, setPanOffset] = useState(0); // 0 = start, 1 = end
+  const [isPanning, setIsPanning] = useState(false);
+  const panStartX = useRef(0);
+  const panStartOffset = useRef(0);
+
   // Unit labels
   const distanceUnit = units === 'imperial' ? 'mi' : 'km';
   const elevationUnit = units === 'imperial' ? 'ft' : 'm';
@@ -299,14 +306,25 @@ export function ElevationProfile({ climb, onClose, hideHeader = false, units = '
     ctx.fillRect(0, 0, width, height);
 
     // Find data ranges
-    const maxDist = Math.max(...processedPoints.map(p => p.distance));
+    const totalMaxDist = Math.max(...processedPoints.map(p => p.distance));
     const minEle = Math.min(...processedPoints.map(p => p.elevation));
     const maxEle = Math.max(...processedPoints.map(p => p.elevation));
     const eleRange = maxEle - minEle || 1;  // Avoid division by zero
 
-    // Scale functions
-    const xScale = (dist: number) => padding.left + (dist / maxDist) * chartWidth;
+    // Calculate visible distance range based on zoom and pan
+    const visibleRange = totalMaxDist / zoomLevel;
+    const visibleStart = panOffset * totalMaxDist;
+    const visibleEnd = visibleStart + visibleRange;
+
+    // Scale functions (adjusted for zoom/pan)
+    const xScale = (dist: number) => {
+      const normalizedDist = (dist - visibleStart) / visibleRange;
+      return padding.left + normalizedDist * chartWidth;
+    };
     const yScale = (ele: number) => padding.top + chartHeight - ((ele - minEle) / eleRange) * chartHeight;
+
+    // For grid labels, use visible range
+    const maxDist = visibleEnd - visibleStart;
 
     // Save points and scales for mouse interaction
     setPoints(processedPoints);
@@ -335,10 +353,10 @@ export function ElevationProfile({ climb, onClose, hideHeader = false, units = '
       ctx.fillText(`${Math.round(ele)} ${elevationUnit}`, padding.left - 10, y);
     }
 
-    // Vertical grid lines (distance)
+    // Vertical grid lines (distance) - adjusted for visible range
     const numVGridLines = 5;
     for (let i = 0; i <= numVGridLines; i++) {
-      const dist = maxDist * i / numVGridLines;
+      const dist = visibleStart + (visibleRange * i / numVGridLines);
       const x = xScale(dist);
 
       ctx.beginPath();
@@ -411,7 +429,7 @@ export function ElevationProfile({ climb, onClose, hideHeader = false, units = '
     ctx.font = 'bold 16px sans-serif';
     ctx.fillText(`${climb.streetName} - Elevation Profile`, width / 2, 20);
 
-  }, [climb, units]);
+  }, [climb, units, zoomLevel, panOffset]);
 
   const handleMouseMove = (event: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current || !points.length || !scales) return;
@@ -468,6 +486,63 @@ export function ElevationProfile({ climb, onClose, hideHeader = false, units = '
 
   const handleMouseLeave = () => {
     setTooltip(null);
+    setIsPanning(false);
+  };
+
+  // Handle mouse wheel for zoom
+  const handleWheel = (event: React.WheelEvent<HTMLCanvasElement>) => {
+    event.preventDefault();
+    const delta = event.deltaY > 0 ? -0.2 : 0.2; // Zoom in/out by 20%
+    const newZoom = Math.max(1, Math.min(10, zoomLevel + delta * zoomLevel));
+    setZoomLevel(newZoom);
+
+    // Adjust pan offset to keep zoom centered on mouse position
+    if (canvasRef.current && scales) {
+      const rect = canvasRef.current.getBoundingClientRect();
+      const mouseX = event.clientX - rect.left;
+      const chartWidth = rect.width - scales.padding.left - scales.padding.right;
+      const mouseRatio = (mouseX - scales.padding.left) / chartWidth;
+
+      // Clamp pan offset to valid range
+      const maxPan = 1 - 1 / newZoom;
+      const newPan = Math.max(0, Math.min(maxPan, panOffset + mouseRatio * (1 / zoomLevel - 1 / newZoom)));
+      setPanOffset(newPan);
+    }
+  };
+
+  // Handle mouse down for panning
+  const handleMouseDown = (event: React.MouseEvent<HTMLCanvasElement>) => {
+    if (zoomLevel > 1) {
+      setIsPanning(true);
+      panStartX.current = event.clientX;
+      panStartOffset.current = panOffset;
+    }
+  };
+
+  // Handle mouse move for panning (when zoomed)
+  const handleMouseMoveWithPan = (event: React.MouseEvent<HTMLCanvasElement>) => {
+    if (isPanning && canvasRef.current && scales) {
+      const rect = canvasRef.current.getBoundingClientRect();
+      const chartWidth = rect.width - scales.padding.left - scales.padding.right;
+      const deltaX = event.clientX - panStartX.current;
+      const deltaPan = -deltaX / chartWidth / zoomLevel;
+      const maxPan = 1 - 1 / zoomLevel;
+      const newPan = Math.max(0, Math.min(maxPan, panStartOffset.current + deltaPan));
+      setPanOffset(newPan);
+    } else {
+      handleMouseMove(event);
+    }
+  };
+
+  // Handle mouse up for panning
+  const handleMouseUp = () => {
+    setIsPanning(false);
+  };
+
+  // Reset zoom
+  const resetZoom = () => {
+    setZoomLevel(1);
+    setPanOffset(0);
   };
 
   // Unit labels for tooltip
@@ -496,11 +571,29 @@ export function ElevationProfile({ climb, onClose, hideHeader = false, units = '
           {/* Canvas for chart */}
           <canvas
             ref={canvasRef}
-            className="w-full h-full cursor-crosshair"
+            className={`w-full h-full ${isPanning ? 'cursor-grabbing' : zoomLevel > 1 ? 'cursor-grab' : 'cursor-crosshair'}`}
             style={{ display: 'block' }}
-            onMouseMove={handleMouseMove}
+            onMouseMove={handleMouseMoveWithPan}
             onMouseLeave={handleMouseLeave}
+            onMouseDown={handleMouseDown}
+            onMouseUp={handleMouseUp}
+            onWheel={handleWheel}
           />
+
+          {/* Zoom controls */}
+          {zoomLevel > 1 && (
+            <div className="absolute bottom-2 right-2 flex items-center gap-2 z-10">
+              <span className="text-xs text-gray-600 bg-white/80 px-2 py-1 rounded">
+                {zoomLevel.toFixed(1)}x
+              </span>
+              <button
+                onClick={resetZoom}
+                className="text-xs bg-gray-200 hover:bg-gray-300 px-2 py-1 rounded"
+              >
+                Reset
+              </button>
+            </div>
+          )}
 
           {/* Tooltip */}
           {tooltip && (

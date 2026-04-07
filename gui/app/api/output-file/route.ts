@@ -39,6 +39,8 @@ export async function GET(request: Request) {
       contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
     } else if (ext === '.csv') {
       contentType = 'text/csv';
+    } else if (ext === '.sqlite' || ext === '.db') {
+      contentType = 'application/x-sqlite3';
     }
 
     return new NextResponse(fileBuffer, {

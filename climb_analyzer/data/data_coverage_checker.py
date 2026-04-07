@@ -491,7 +491,8 @@ def auto_download_osm_data(
                 if 'subregions' in continent_data:
                     for region_path, region_info in continent_data['subregions'].items():
                         region_name = region_path.split('/')[-1]
-                        if region_name.lower() == loc_normalized:
+                        # Support both formats: "france" (simple name) or "europe/france" (full path)
+                        if region_name.lower() == loc_normalized or region_path.lower() == loc_normalized:
                             pbf_url = region_info.get('pbf_url')
                             if pbf_url:
                                 filename = pbf_url.split('/')[-1]
@@ -522,8 +523,10 @@ def auto_download_osm_data(
                     # Check if this region matches
                     region_name = region_path.split('/')[-1]
                     region_name_normalized = normalize_region_name(region_name)
+                    region_path_normalized = normalize_region_name(region_path)
 
-                    if region_name_normalized == target_name_normalized:
+                    # Support both formats: "france" or "europe/france"
+                    if region_name_normalized == target_name_normalized or region_path_normalized == target_name_normalized:
                         pbf_url = region_info.get('pbf_url')
                         if pbf_url:
                             return pbf_url

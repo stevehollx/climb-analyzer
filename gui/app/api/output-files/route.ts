@@ -17,17 +17,27 @@ export async function GET(): Promise<Response> {
     // Check output directory for analysis results
     try {
       const files = await fs.readdir(OUTPUT_DIR);
-      const xlsxFiles = files.filter(f => f.endsWith('.xlsx') || f.endsWith('.csv'));
+      // Include .xlsx, .csv, and .sqlite files
+      const dataFiles = files.filter(f =>
+        f.endsWith('.xlsx') || f.endsWith('.csv') || f.endsWith('.sqlite') || f.endsWith('.db')
+      );
 
-      for (const filename of xlsxFiles) {
+      for (const filename of dataFiles) {
         const filePath = path.join(OUTPUT_DIR, filename);
         try {
           const stats = await fs.stat(filePath);
 
           // Parse filename to extract region
-          // Format: climbs_[REGION]_[SURFACE]_[SCORE]_[SCOPE]_[RADIUS].xlsx
-          const parts = filename.replace('.xlsx', '').replace('.csv', '').split('_');
-          const region = parts.slice(1, -3).join('_');
+          // Format: [REGION]_climbs_[SURFACE]_[SCORE]_[DATE]_[VERSION].xlsx/sqlite
+          const baseName = filename
+            .replace('.xlsx', '')
+            .replace('.csv', '')
+            .replace('.sqlite', '')
+            .replace('.db', '');
+          const parts = baseName.split('_');
+          // Find "_climbs" and take everything before it as region
+          const climbsIndex = parts.indexOf('climbs');
+          const region = climbsIndex > 0 ? parts.slice(0, climbsIndex).join(' ') : parts[0];
 
           outputFiles.push({
             filename,

@@ -2540,3 +2540,94 @@ osm_pbf_urls = {
         }
     }
 }
+
+
+# =============================================================================
+# Partition Definitions for Large Regions
+# =============================================================================
+# When a region's climb database exceeds 1.5GB, it needs to be partitioned
+# for GitHub release assets (2GB limit) and sql.js WASM loading (iOS Safari).
+#
+# These definitions use existing Geofabrik subregion boundaries where available.
+# Regions without predefined partitions will use automatic Quadtree subdivision.
+#
+# Format:
+#   "region_key": {
+#       "partition_id": {
+#           "display_name": "Human readable name",
+#           "bounds": (min_lat, min_lon, max_lat, max_lon)
+#       }
+#   }
+# =============================================================================
+
+PARTITION_DEFINITIONS = {
+    # California - uses Geofabrik NorCal/SoCal boundaries
+    "california": {
+        "norcal": {
+            "display_name": "Northern California",
+            "bounds": (35.78528, -125.8935, 42.01618, -115.6468),  # From Geofabrik
+        },
+        "socal": {
+            "display_name": "Southern California",
+            "bounds": (32.48438, -121.4401, 35.81055, -114.1291),  # From Geofabrik
+        },
+    },
+
+    # Texas - very large state, may need partitioning
+    # Uses geographic quadrants since no Geofabrik subregions
+    "texas": {
+        "north": {
+            "display_name": "North Texas",
+            "bounds": (32.0, -106.65, 36.5, -93.51),
+        },
+        "south": {
+            "display_name": "South Texas",
+            "bounds": (25.84, -106.65, 32.0, -93.51),
+        },
+    },
+
+    # France - large European country
+    # Uses cardinal direction splits
+    "france": {
+        "north": {
+            "display_name": "Northern France",
+            "bounds": (46.5, -5.5, 51.15, 8.23),
+        },
+        "south": {
+            "display_name": "Southern France",
+            "bounds": (41.31, -5.5, 46.5, 9.56),
+        },
+    },
+
+    # Germany - uses Geofabrik-based regions
+    "germany": {
+        "north": {
+            "display_name": "Northern Germany",
+            "bounds": (51.5, 5.87, 55.06, 15.04),
+        },
+        "south": {
+            "display_name": "Southern Germany",
+            "bounds": (47.27, 5.87, 51.5, 15.04),
+        },
+    },
+}
+
+
+def get_predefined_partitions(region_key: str):
+    """
+    Get predefined partition definitions for a region if available.
+
+    Args:
+        region_key: Region identifier (e.g., "california", "france", "us/california")
+
+    Returns:
+        Dictionary of partition definitions or None if not defined
+    """
+    # Normalize the region key
+    normalized = region_key.lower().replace(" ", "-").replace("_", "-")
+
+    # Extract just the region name from paths like "us/california" or "europe/france"
+    if "/" in normalized:
+        normalized = normalized.split("/")[-1]
+
+    return PARTITION_DEFINITIONS.get(normalized)

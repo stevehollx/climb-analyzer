@@ -253,27 +253,33 @@ export function ClimbDetailDrawer({ climb, allClimbs = [], onClose, onClimbSelec
           </div>
         </div>
 
-        {/* Additional Info */}
-        {(climb.surface || climb.highwayType || climb.cyclingAccess) && (
+        {/* Road Info */}
+        {(climb.surface || climb.highwayType || climb.cyclingAccess || climb.tracktype) && (
           <div className="bg-gray-50 rounded-lg p-3 mb-4">
-            <h3 className="font-semibold text-gray-900 mb-2">Road Info</h3>
-            <div className="grid grid-cols-3 gap-4 text-sm">
+            <h3 className="font-semibold text-gray-900 mb-2">Road Details</h3>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
               {climb.surface && (
                 <div>
                   <div className="text-gray-500">Surface</div>
-                  <div className="font-medium">{climb.surface}</div>
+                  <div className="font-medium capitalize">{climb.surface}</div>
                 </div>
               )}
               {climb.highwayType && (
                 <div>
-                  <div className="text-gray-500">Road Type</div>
-                  <div className="font-medium">{climb.highwayType}</div>
+                  <div className="text-gray-500">Highway Type</div>
+                  <div className="font-medium capitalize">{climb.highwayType}</div>
+                </div>
+              )}
+              {climb.tracktype && (
+                <div>
+                  <div className="text-gray-500">Track Type</div>
+                  <div className="font-medium">{climb.tracktype}</div>
                 </div>
               )}
               {climb.cyclingAccess && (
                 <div>
-                  <div className="text-gray-500">Cycling</div>
-                  <div className="font-medium">{climb.cyclingAccess}</div>
+                  <div className="text-gray-500">Cycling Access</div>
+                  <div className="font-medium capitalize">{climb.cyclingAccess}</div>
                 </div>
               )}
             </div>
@@ -315,6 +321,16 @@ export function ClimbDetailDrawer({ climb, allClimbs = [], onClose, onClimbSelec
             <h3 className="font-semibold text-gray-900 mb-2">Elevation Profile</h3>
             <div className="bg-gray-50 rounded-lg overflow-hidden">
               <ElevationProfile climb={climb} onClose={() => {}} hideHeader />
+            </div>
+          </div>
+        )}
+
+        {/* All Way IDs (if multiple) */}
+        {climb.allWayIds && climb.allWayIds.includes(',') && (
+          <div className="bg-gray-50 rounded-lg p-3 mb-4">
+            <h3 className="font-semibold text-gray-900 mb-2">All Way IDs</h3>
+            <div className="text-xs text-gray-600 font-mono break-all">
+              {climb.allWayIds}
             </div>
           </div>
         )}

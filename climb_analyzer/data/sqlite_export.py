@@ -7,6 +7,7 @@ Uses iOS-compatible schema with camelCase columns, UUID primary keys, geohash
 columns, R-tree spatial index, and file_stats table.
 """
 
+import json
 import sqlite3
 import uuid
 from datetime import datetime
@@ -653,6 +654,180 @@ def convert_xlsx_to_sqlite(
             logger.debug(f"Wrote {exporter.row_count} rows...")
 
         return sqlite_path, exporter.row_count
+
+
+def export_climbs_with_partitioning(
+    climbs: List[Dict],
+    output_dir: Path,
+    base_filename: str,
+    region_key: str,
+    file_id: str,
+    units: str = "ft",
+    batch_size: int = 5000,
+) -> Tuple[List[Path], List]:
+    """
+    Export climbs to SQLite with automatic partitioning if needed.
+
+    For regions exceeding 1.5GB estimated size, this function will:
+    1. Try predefined Geofabrik partitions (e.g., NorCal/SoCal for California)
+    2. Fall back to Quadtree subdivision if no predefined partitions exist
+
+    Args:
+        climbs: List of climb dictionaries with lat/lon keys
+        output_dir: Directory for output files
+        base_filename: Base name for output files (without extension)
+        region_key: Region identifier for partition lookup
+        file_id: File identifier for SQLite metadata
+        units: "ft" for imperial, "m" for metric
+        batch_size: Number of rows per batch insert
+
+    Returns:
+        Tuple of (list of SQLite file paths, list of PartitionInfo objects)
+        If no partitioning needed, returns ([single_file], [])
+    """
+    from climb_analyzer.data.partition_engine import (
+        needs_partitioning,
+        partition_climbs,
+        get_climbs_for_partition,
+        PartitionInfo,
+    )
+    from climb_analyzer.data.geo_definitions import get_predefined_partitions
+
+    # Check if partitioning is needed
+    if not needs_partitioning(len(climbs)):
+        # Single file export
+        sqlite_path = output_dir / f"{base_filename}.sqlite"
+        with SQLiteExporter(sqlite_path, file_id=file_id, units=units, batch_size=batch_size) as exporter:
+            # Process in batches
+            for i in range(0, len(climbs), batch_size):
+                batch = climbs[i:i + batch_size]
+                exporter.write_rows(batch)
+
+        logger.info(f"Exported {len(climbs):,} climbs to single file: {sqlite_path}")
+        return [sqlite_path], []
+
+    # Get partition definitions
+    predefined = get_predefined_partitions(region_key)
+    partitions = partition_climbs(climbs, predefined_partitions=predefined)
+
+    logger.info(f"Partitioning {len(climbs):,} climbs into {len(partitions)} partitions")
+
+    sqlite_files = []
+    partition_infos = []
+
+    for partition in partitions:
+        # Get climbs for this partition
+        partition_climbs_list = get_climbs_for_partition(climbs, partition)
+
+        if not partition_climbs_list:
+            logger.warning(f"Partition {partition.partition_id} has no climbs after filtering")
+            continue
+
+        # Create partition-specific filename
+        partition_filename = f"{base_filename}_{partition.partition_id}.sqlite"
+        sqlite_path = output_dir / partition_filename
+        partition_file_id = f"{file_id}_{partition.partition_id}"
+
+        # Export partition
+        with SQLiteExporter(sqlite_path, file_id=partition_file_id, units=units, batch_size=batch_size) as exporter:
+            for i in range(0, len(partition_climbs_list), batch_size):
+                batch = partition_climbs_list[i:i + batch_size]
+                exporter.write_rows(batch)
+
+        # Update partition info with file details
+        partition.file_path = sqlite_path
+        partition.file_size = sqlite_path.stat().st_size
+        partition.climb_count = len(partition_climbs_list)
+
+        sqlite_files.append(sqlite_path)
+        partition_infos.append(partition)
+
+        size_mb = partition.file_size / (1024 * 1024)
+        logger.info(f"  {partition.display_name}: {partition.climb_count:,} climbs ({size_mb:.1f} MB)")
+
+    # Generate partition metadata files and checksums
+    if partition_infos:
+        logger.info("Generating partition metadata files...")
+        checksums_content = []
+
+        for partition in partition_infos:
+            # Write individual metadata file
+            metadata_path = write_partition_metadata(partition, output_dir)
+            logger.info(f"  {metadata_path.name}")
+
+            # Collect checksum for combined file
+            sha256 = compute_sha256(partition.file_path)
+            checksums_content.append(f"{sha256}  {partition.file_path.name}")
+
+        # Write combined checksums file
+        checksums_file = output_dir / f"{base_filename}.partitions.sha256"
+        with open(checksums_file, "w") as f:
+            f.write("\n".join(checksums_content) + "\n")
+        logger.info(f"Created partition checksums: {checksums_file.name}")
+
+    return sqlite_files, partition_infos
+
+
+def compute_sha256(file_path: Path) -> str:
+    """
+    Compute SHA256 hash of a file.
+
+    Args:
+        file_path: Path to the file to hash
+
+    Returns:
+        Hex string of the SHA256 hash
+    """
+    import hashlib
+
+    sha256_hash = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for byte_block in iter(lambda: f.read(65536), b""):
+            sha256_hash.update(byte_block)
+    return sha256_hash.hexdigest()
+
+
+def write_partition_metadata(partition, output_dir: Path) -> Path:
+    """
+    Write partition metadata JSON file alongside SQLite.
+
+    Creates a .metadata.json file containing:
+    - partition_id, display_name
+    - bounds (min_lat, min_lon, max_lat, max_lon)
+    - climb_count, file_size_bytes, file_size_mb
+    - sha256 checksum
+    - created_at timestamp
+
+    Args:
+        partition: PartitionInfo object with partition details
+        output_dir: Directory for the metadata file
+
+    Returns:
+        Path to the created metadata file
+    """
+    from datetime import datetime
+
+    metadata = {
+        "partition_id": partition.partition_id,
+        "display_name": partition.display_name,
+        "bounds": {
+            "min_lat": partition.bounds[0],
+            "min_lon": partition.bounds[1],
+            "max_lat": partition.bounds[2],
+            "max_lon": partition.bounds[3],
+        } if partition.bounds else None,
+        "climb_count": partition.climb_count,
+        "file_size_bytes": partition.file_size,
+        "file_size_mb": round(partition.file_size / (1024**2), 1) if partition.file_size else None,
+        "sha256": compute_sha256(partition.file_path) if partition.file_path else None,
+        "created_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+    metadata_path = partition.file_path.parent / f"{partition.file_path.name}.metadata.json"
+    with open(metadata_path, "w") as f:
+        json.dump(metadata, f, indent=2)
+
+    return metadata_path
 
 
 if __name__ == "__main__":
