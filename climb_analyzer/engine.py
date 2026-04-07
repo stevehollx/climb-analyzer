@@ -13978,128 +13978,303 @@ class ClimbAnalyzer:
 
         # ============================================================================
         # SQLite Export - Generate iOS-compatible database alongside Excel
+        # With geographic partitioning for large regions (>1.5GB)
         # ============================================================================
         sqlite_files = []
+        partition_info = []
+        sqlite_checksums = {}
+
         try:
             from climb_analyzer.data.sqlite_export import SQLiteExporter
-
-            sqlite_filename = f"{base_filename}{suffix}.sqlite"
-            sqlite_file = output_dir / sqlite_filename
-
-            print(f"\nGenerating SQLite database for iOS app...")
+            from climb_analyzer.data.partition_engine import (
+                needs_partitioning,
+                partition_climbs,
+                PartitionInfo,
+                _in_bounds,
+            )
+            from climb_analyzer.data.geo_definitions import get_predefined_partitions
 
             # Determine units for SQLite (ft or m)
             db_units = "ft" if units == "imperial" else "m"
 
-            with SQLiteExporter(sqlite_file, file_id=sqlite_filename, units=db_units) as exporter:
-                # Re-read the sorted temp file and geocode data
-                with open(final_sorted_file.name, "rb") as f:
-                    geocode_lookup = {}
-                    if geocode_temp_file and Path(geocode_temp_file.name).exists():
-                        with open(geocode_temp_file.name, "rb") as gf:
-                            try:
-                                while True:
-                                    geocode_lookup.update(safe_pickle_load(gf))
-                            except EOFError:
-                                pass
+            # Check if partitioning is needed
+            use_partitioning = needs_partitioning(total_filtered)
 
-                    with tqdm(
-                        total=total_filtered, desc="  Writing SQLite", unit="climbs", **TQDM_DEFAULTS
-                    ) as pbar:
-                        batch_rows = []
+            if use_partitioning:
+                print(f"\nGenerating partitioned SQLite databases for iOS app...")
+                print(f"  Region '{scope_info}' has {total_filtered:,} climbs - partitioning required")
 
+                # Get partition definitions
+                region_key = scope_info.lower().replace(" ", "-").replace("_", "-") if scope_info else "region"
+                predefined = get_predefined_partitions(region_key)
+
+                if predefined:
+                    print(f"  Using predefined partitions: {', '.join(predefined.keys())}")
+                    partitions = [
+                        PartitionInfo(
+                            partition_id=pid,
+                            display_name=pdef["display_name"],
+                            bounds=pdef["bounds"],
+                            climb_count=0,  # Will be counted during export
+                        )
+                        for pid, pdef in predefined.items()
+                    ]
+                else:
+                    # For automatic partitioning, we need to scan climbs first to get bounds
+                    print(f"  No predefined partitions - using automatic Quadtree subdivision")
+                    # Scan climbs to get bounds and count for quadtree
+                    min_lat = min_lon = float('inf')
+                    max_lat = max_lon = float('-inf')
+                    with open(final_sorted_file.name, "rb") as f:
                         try:
                             while True:
-                                batch_climbs = safe_pickle_load(f)
-
-                                for climb in batch_climbs:
-                                    # Build row dict matching Excel format
-                                    geocode_key = f"{climb.start_lat:.5f},{climb.start_lon:.5f}"
-                                    geocode_data = geocode_lookup.get(geocode_key, {})
-
-                                    # Distance from center
-                                    center_distance = 0.0
-                                    if analysis_center:
-                                        from math import radians, sin, cos, sqrt, atan2
-                                        lat1, lon1 = radians(analysis_center[0]), radians(analysis_center[1])
-                                        lat2, lon2 = radians(climb.start_lat), radians(climb.start_lon)
-                                        dlat, dlon = lat2 - lat1, lon2 - lon1
-                                        a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
-                                        center_distance = 6371 * 2 * atan2(sqrt(a), sqrt(1-a))
-
-                                    # Unit conversions
-                                    if units == "imperial":
-                                        elev_gain = climb.elevation_gain * 3.28084
-                                        height = climb.height * 3.28084
-                                        prominence = climb.prominence * 3.28084
-                                        length = climb.length_km * 0.621371
-                                        center_distance_display = center_distance * 0.621371
-                                        elev_unit = "ft"
-                                        dist_unit = "mi"
-                                    else:
-                                        elev_gain = climb.elevation_gain
-                                        height = climb.height
-                                        prominence = climb.prominence
-                                        length = climb.length_km
-                                        center_distance_display = center_distance
-                                        elev_unit = "m"
-                                        dist_unit = "km"
-
-                                    # Way IDs
-                                    way_ids_str = str(climb.way_ids[0]) if climb.way_ids else ""
-                                    osm_links_str = climb.osm_links[0] if climb.osm_links else ""
-                                    all_way_ids_str = ", ".join(str(w) for w in (climb.way_ids or []))
-
-                                    row = {
-                                        "Street Name": climb.street_name,
-                                        "City": geocode_data.get("city", ""),
-                                        "State": geocode_data.get("state", ""),
-                                        "Country": geocode_data.get("country", ""),
-                                        f"From Center ({dist_unit})": round(center_distance_display, 1),
-                                        "Latitude": round(climb.start_lat, 5),
-                                        "Longitude": round(climb.start_lon, 5),
-                                        "Cycling": climb.cycling_access,
-                                        "Category": climb.climb_category,
-                                        "Basic Score": int(climb.climb_score),
-                                        "FIETS Score": round(climb.fiets_score, 1),
-                                        "PDI Score": round(climb.pdi_score, 1),
-                                        f"Elev Gain ({elev_unit})": round(elev_gain, 2) if elev_gain < 1 else int(elev_gain),
-                                        f"Height ({elev_unit})": round(height, 2) if height < 1 else int(height),
-                                        f"Prominence ({elev_unit})": round(prominence, 2) if prominence < 1 else int(prominence),
-                                        f"Length ({dist_unit})": round(length, 2),
-                                        "Avg Grade (%)": round(min(climb.avg_grade, 50.0), 2),
-                                        "Max Grade (%)": round(climb.max_grade, 2),
-                                        "Highway Type": climb.highway_type,
-                                        "Surface": climb.surface,
-                                        "Tracktype": climb.tracktype,
-                                        "Start Way ID": way_ids_str,
-                                        "OSM Link": osm_links_str,
-                                        "All Way IDs": all_way_ids_str,
-                                        "Connected Climbs": (
-                                            ", ".join(f"{name} ({way_id})" for name, way_id in climb.connected_climbs)
-                                            if climb.connected_climbs else "None"
-                                        ),
-                                        f"Elevation Profile ({elev_unit})": getattr(climb, "elevation_profile", "") or "",
-                                    }
-
-                                    batch_rows.append(row)
-                                    pbar.update(1)
-
-                                    # Write batch when full
-                                    if len(batch_rows) >= 5000:
-                                        exporter.write_rows(batch_rows)
-                                        batch_rows = []
-
+                                batch = safe_pickle_load(f)
+                                for climb in batch:
+                                    if climb.start_lat < min_lat:
+                                        min_lat = climb.start_lat
+                                    if climb.start_lat > max_lat:
+                                        max_lat = climb.start_lat
+                                    if climb.start_lon < min_lon:
+                                        min_lon = climb.start_lon
+                                    if climb.start_lon > max_lon:
+                                        max_lon = climb.start_lon
                         except EOFError:
                             pass
 
-                        # Write final batch
-                        if batch_rows:
-                            exporter.write_rows(batch_rows)
+                    overall_bounds = (min_lat, min_lon, max_lat, max_lon)
+                    # Use partition_climbs with empty list just to generate quadtree structure
+                    # We'll route climbs during the streaming pass
+                    from climb_analyzer.data.partition_engine import _quadtree_partition
+                    raw_partitions = _quadtree_partition([], overall_bounds, max_climbs=900000)
+                    # Fallback: just create quadrant partitions
+                    mid_lat = (min_lat + max_lat) / 2
+                    mid_lon = (min_lon + max_lon) / 2
+                    partitions = [
+                        PartitionInfo("northeast", "Northeast", (mid_lat, mid_lon, max_lat, max_lon), 0),
+                        PartitionInfo("northwest", "Northwest", (mid_lat, min_lon, max_lat, mid_lon), 0),
+                        PartitionInfo("southeast", "Southeast", (min_lat, mid_lon, mid_lat, max_lon), 0),
+                        PartitionInfo("southwest", "Southwest", (min_lat, min_lon, mid_lat, mid_lon), 0),
+                    ]
 
-            sqlite_size_mb = sqlite_file.stat().st_size / (1024**2)
-            print(f"✓ Saved SQLite database: {sqlite_file.name} ({exporter.row_count:,} rows, {sqlite_size_mb:.1f} MB)")
-            sqlite_files.append(sqlite_file)
+                # Create exporters for each partition
+                exporters = {}
+                for part in partitions:
+                    part_filename = f"{base_filename}{suffix}_{part.partition_id}.sqlite"
+                    part_file = output_dir / part_filename
+                    exporters[part.partition_id] = {
+                        "exporter": SQLiteExporter(part_file, file_id=part_filename, units=db_units),
+                        "file": part_file,
+                        "partition": part,
+                        "count": 0,
+                    }
+                    exporters[part.partition_id]["exporter"].open()
+
+                # Also create an "other" exporter for boundary cases
+                other_filename = f"{base_filename}{suffix}_other.sqlite"
+                other_file = output_dir / other_filename
+                exporters["other"] = {
+                    "exporter": SQLiteExporter(other_file, file_id=other_filename, units=db_units),
+                    "file": other_file,
+                    "partition": PartitionInfo("other", "Other Regions", (0, 0, 0, 0), 0),
+                    "count": 0,
+                }
+                exporters["other"]["exporter"].open()
+
+            else:
+                print(f"\nGenerating SQLite database for iOS app...")
+                sqlite_filename = f"{base_filename}{suffix}.sqlite"
+                sqlite_file = output_dir / sqlite_filename
+                single_exporter = SQLiteExporter(sqlite_file, file_id=sqlite_filename, units=db_units)
+                single_exporter.open()
+
+            # Re-read the sorted temp file and geocode data
+            with open(final_sorted_file.name, "rb") as f:
+                geocode_lookup = {}
+                if geocode_temp_file and Path(geocode_temp_file.name).exists():
+                    with open(geocode_temp_file.name, "rb") as gf:
+                        try:
+                            while True:
+                                geocode_lookup.update(safe_pickle_load(gf))
+                        except EOFError:
+                            pass
+
+                with tqdm(
+                    total=total_filtered, desc="  Writing SQLite", unit="climbs", **TQDM_DEFAULTS
+                ) as pbar:
+                    batch_rows = {}  # Keyed by partition_id if partitioning, else single list
+                    if not use_partitioning:
+                        batch_rows["single"] = []
+
+                    try:
+                        while True:
+                            batch_climbs = safe_pickle_load(f)
+
+                            for climb in batch_climbs:
+                                # Build row dict matching Excel format
+                                geocode_key = f"{climb.start_lat:.5f},{climb.start_lon:.5f}"
+                                geocode_data = geocode_lookup.get(geocode_key, {})
+
+                                # Distance from center
+                                center_distance = 0.0
+                                if analysis_center:
+                                    from math import radians, sin, cos, sqrt, atan2
+                                    lat1, lon1 = radians(analysis_center[0]), radians(analysis_center[1])
+                                    lat2, lon2 = radians(climb.start_lat), radians(climb.start_lon)
+                                    dlat, dlon = lat2 - lat1, lon2 - lon1
+                                    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+                                    center_distance = 6371 * 2 * atan2(sqrt(a), sqrt(1-a))
+
+                                # Unit conversions
+                                if units == "imperial":
+                                    elev_gain = climb.elevation_gain * 3.28084
+                                    height = climb.height * 3.28084
+                                    prominence = climb.prominence * 3.28084
+                                    length = climb.length_km * 0.621371
+                                    center_distance_display = center_distance * 0.621371
+                                    elev_unit = "ft"
+                                    dist_unit = "mi"
+                                else:
+                                    elev_gain = climb.elevation_gain
+                                    height = climb.height
+                                    prominence = climb.prominence
+                                    length = climb.length_km
+                                    center_distance_display = center_distance
+                                    elev_unit = "m"
+                                    dist_unit = "km"
+
+                                # Way IDs
+                                way_ids_str = str(climb.way_ids[0]) if climb.way_ids else ""
+                                osm_links_str = climb.osm_links[0] if climb.osm_links else ""
+                                all_way_ids_str = ", ".join(str(w) for w in (climb.way_ids or []))
+
+                                row = {
+                                    "Street Name": climb.street_name,
+                                    "City": geocode_data.get("city", ""),
+                                    "State": geocode_data.get("state", ""),
+                                    "Country": geocode_data.get("country", ""),
+                                    f"From Center ({dist_unit})": round(center_distance_display, 1),
+                                    "Latitude": round(climb.start_lat, 5),
+                                    "Longitude": round(climb.start_lon, 5),
+                                    "Cycling": climb.cycling_access,
+                                    "Category": climb.climb_category,
+                                    "Basic Score": int(climb.climb_score),
+                                    "FIETS Score": round(climb.fiets_score, 1),
+                                    "PDI Score": round(climb.pdi_score, 1),
+                                    f"Elev Gain ({elev_unit})": round(elev_gain, 2) if elev_gain < 1 else int(elev_gain),
+                                    f"Height ({elev_unit})": round(height, 2) if height < 1 else int(height),
+                                    f"Prominence ({elev_unit})": round(prominence, 2) if prominence < 1 else int(prominence),
+                                    f"Length ({dist_unit})": round(length, 2),
+                                    "Avg Grade (%)": round(min(climb.avg_grade, 50.0), 2),
+                                    "Max Grade (%)": round(climb.max_grade, 2),
+                                    "Highway Type": climb.highway_type,
+                                    "Surface": climb.surface,
+                                    "Tracktype": climb.tracktype,
+                                    "Start Way ID": way_ids_str,
+                                    "OSM Link": osm_links_str,
+                                    "All Way IDs": all_way_ids_str,
+                                    "Connected Climbs": (
+                                        ", ".join(f"{name} ({way_id})" for name, way_id in climb.connected_climbs)
+                                        if climb.connected_climbs else "None"
+                                    ),
+                                    f"Elevation Profile ({elev_unit})": getattr(climb, "elevation_profile", "") or "",
+                                }
+
+                                if use_partitioning:
+                                    # Route to appropriate partition based on location
+                                    target_partition = "other"
+                                    lat, lon = climb.start_lat, climb.start_lon
+                                    for part in partitions:
+                                        if _in_bounds(lat, lon, part.bounds):
+                                            target_partition = part.partition_id
+                                            break
+
+                                    if target_partition not in batch_rows:
+                                        batch_rows[target_partition] = []
+                                    batch_rows[target_partition].append(row)
+                                    exporters[target_partition]["count"] += 1
+
+                                    # Write batch when full
+                                    if len(batch_rows[target_partition]) >= 5000:
+                                        exporters[target_partition]["exporter"].write_rows(batch_rows[target_partition])
+                                        batch_rows[target_partition] = []
+                                else:
+                                    batch_rows["single"].append(row)
+                                    # Write batch when full
+                                    if len(batch_rows["single"]) >= 5000:
+                                        single_exporter.write_rows(batch_rows["single"])
+                                        batch_rows["single"] = []
+
+                                pbar.update(1)
+
+                    except EOFError:
+                        pass
+
+                    # Write final batches
+                    if use_partitioning:
+                        for part_id, rows in batch_rows.items():
+                            if rows and part_id in exporters:
+                                exporters[part_id]["exporter"].write_rows(rows)
+                    else:
+                        if batch_rows["single"]:
+                            single_exporter.write_rows(batch_rows["single"])
+
+            # Close exporters and collect files
+            if use_partitioning:
+                print(f"\n  Partition summary:")
+                for part_id, exp_info in exporters.items():
+                    exp_info["exporter"].close()
+                    if exp_info["count"] > 0:
+                        file_size_mb = exp_info["file"].stat().st_size / (1024**2)
+                        print(f"    {exp_info['partition'].display_name}: {exp_info['count']:,} climbs ({file_size_mb:.1f} MB)")
+                        sqlite_files.append(exp_info["file"])
+                        exp_info["partition"].climb_count = exp_info["count"]
+                        exp_info["partition"].file_path = exp_info["file"]
+                        exp_info["partition"].file_size = exp_info["file"].stat().st_size
+                        partition_info.append(exp_info["partition"])
+                    else:
+                        # Remove empty partition files
+                        if exp_info["file"].exists():
+                            exp_info["file"].unlink()
+
+                print(f"\n✓ Created {len(sqlite_files)} partitioned SQLite databases")
+
+                # Generate partition metadata files and checksums
+                if partition_info:
+                    from climb_analyzer.data.sqlite_export import write_partition_metadata, compute_sha256
+
+                    print(f"  Generating partition metadata files...")
+                    checksums_content = []
+
+                    for partition in partition_info:
+                        # Write individual metadata file
+                        metadata_path = write_partition_metadata(partition, output_dir)
+                        print(f"    {metadata_path.name}")
+
+                        # Collect checksum for combined file
+                        sha256 = compute_sha256(partition.file_path)
+                        checksums_content.append(f"{sha256}  {partition.file_path.name}")
+
+                    # Write combined checksums file
+                    checksums_file = output_dir / f"{base_filename}{suffix}.partitions.sha256"
+                    with open(checksums_file, "w") as f:
+                        f.write("\n".join(checksums_content) + "\n")
+                    print(f"  ✓ Created partition checksums: {checksums_file.name}")
+
+            else:
+                single_exporter.close()
+                sqlite_size_mb = sqlite_file.stat().st_size / (1024**2)
+                print(f"✓ Saved SQLite database: {sqlite_file.name} ({single_exporter.row_count:,} rows, {sqlite_size_mb:.1f} MB)")
+                sqlite_files.append(sqlite_file)
+
+                # Split large SQLite files for GitHub releases (2GB limit)
+                from utils.file_splitter import should_split_file, split_file
+
+                if should_split_file(sqlite_file):
+                    print(f"\n  SQLite file exceeds 1.95GB - splitting for GitHub releases...")
+                    chunks, sqlite_checksums = split_file(sqlite_file, delete_original=True)
+                    # Replace the single file with the chunks
+                    sqlite_files = chunks
+                    print(f"  ✓ Created {len(chunks)} chunks with SHA256 checksums")
 
         except Exception as e:
             print(f"⚠️  SQLite export failed: {e}")
@@ -14107,7 +14282,13 @@ class ClimbAnalyzer:
             traceback.print_exc()
 
         # Return dict with both Excel and SQLite files
-        return {"xlsx": created_files, "sqlite": sqlite_files, "climb_count": total_filtered}
+        return {
+            "xlsx": created_files,
+            "sqlite": sqlite_files,
+            "sqlite_checksums": sqlite_checksums,
+            "sqlite_partitions": partition_info,  # List of PartitionInfo for partitioned exports
+            "climb_count": total_filtered
+        }
 
     # ============================================================================
     # DEAD CODE - Chunked export function (never executes)

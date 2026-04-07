@@ -16,15 +16,48 @@ import {
 import { Map, List, Upload, CheckCircle2, X, ChevronDown, ChevronUp, Trophy } from 'lucide-react';
 import { Climb } from '@/types/climb';
 import { parseClimbCSV, parseClimbExcel, getCategoryColor, getTopNClimbs, getTopPercentClimbs } from '@/lib/csv-parser';
+import { parseClimbSQLite } from '@/lib/sqlite-parser';
 import { ClimbMap } from '@/components/ClimbMap';
 import { ClimbList } from '@/components/ClimbList';
 import { ElevationProfile } from '@/components/ElevationProfile';
 import { LocationFilter } from '@/components/LocationFilter';
 import { ClimbDetailDrawer } from '@/components/ClimbDetailDrawer';
+import { ClimbSearch, filterClimbsBySearch } from '@/components/ClimbSearch';
+import { ChipFilter, SURFACE_OPTIONS, HIGHWAY_TYPE_OPTIONS, CYCLING_ACCESS_OPTIONS, TRACKTYPE_OPTIONS } from '@/components/ChipFilter';
 
 interface LoadedFile {
   name: string;
   climbs: Climb[];
+  partitionId?: string;  // e.g., "norcal", "socal" if detected from filename
+}
+
+// Partition ID patterns (matches partition_engine.py)
+const PARTITION_PATTERNS = /_(norcal|socal|north|south|east|west|northeast|northwest|southeast|southwest|ne|nw|se|sw|other)\.sqlite$/i;
+
+function extractPartitionId(filename: string): string | undefined {
+  const match = filename.match(PARTITION_PATTERNS);
+  return match ? match[1].toLowerCase() : undefined;
+}
+
+function getPartitionDisplayName(partitionId: string): string {
+  const names: Record<string, string> = {
+    norcal: 'Northern California',
+    socal: 'Southern California',
+    north: 'North',
+    south: 'South',
+    east: 'East',
+    west: 'West',
+    northeast: 'Northeast',
+    northwest: 'Northwest',
+    southeast: 'Southeast',
+    southwest: 'Southwest',
+    ne: 'Northeast',
+    nw: 'Northwest',
+    se: 'Southeast',
+    sw: 'Southwest',
+    other: 'Other Regions',
+  };
+  return names[partitionId] || partitionId.charAt(0).toUpperCase() + partitionId.slice(1);
 }
 
 // Calculate distance between two coordinates in miles using Haversine formula
@@ -159,6 +192,7 @@ function VisualizePageContent() {
   const [highwayTypeFilters, setHighwayTypeFilters] = useState<Set<string>>(new Set(['all']));
   const [tracktypeFilters, setTracktypeFilters] = useState<Set<string>>(new Set(['all']));
   const [locationFilter, setLocationFilter] = useState<{ lat: number; lon: number; radius: number } | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Category filter state - All categories selected by default including N/A and Uncategorized
   // Support both formats: "Cat 1" and "1", "N/A" and "Uncategorized"
@@ -265,9 +299,14 @@ function VisualizePageContent() {
         setLoadingProgress(((i) / totalFiles) * 100);
 
         const isExcel = file.name.endsWith('.xlsx') || file.name.endsWith('.xls');
+        const isSQLite = file.name.endsWith('.sqlite') || file.name.endsWith('.db');
         let climbs: Climb[];
 
-        if (isExcel) {
+        if (isSQLite) {
+          // Parse SQLite database
+          const arrayBuffer = await file.arrayBuffer();
+          climbs = await parseClimbSQLite(arrayBuffer);
+        } else if (isExcel) {
           // Parse Excel file
           const arrayBuffer = await file.arrayBuffer();
           climbs = parseClimbExcel(arrayBuffer);
@@ -277,7 +316,8 @@ function VisualizePageContent() {
           climbs = parseClimbCSV(text);
         }
 
-        newFiles.push({ name: file.name, climbs });
+        const partitionId = extractPartitionId(file.name);
+        newFiles.push({ name: file.name, climbs, partitionId });
         setLoadingProgress(((i + 1) / totalFiles) * 100);
       } catch (error) {
         console.error(`Failed to parse ${file.name}:`, error);
@@ -361,7 +401,9 @@ function VisualizePageContent() {
         await new Promise(resolve => setTimeout(resolve, 50));
 
         let climbs: Climb[];
-        if (filename.endsWith('.xlsx') || filename.endsWith('.xls')) {
+        if (filename.endsWith('.sqlite') || filename.endsWith('.db')) {
+          climbs = await parseClimbSQLite(allChunks.buffer);
+        } else if (filename.endsWith('.xlsx') || filename.endsWith('.xls')) {
           climbs = parseClimbExcel(allChunks.buffer);
         } else {
           const text = new TextDecoder().decode(allChunks);
@@ -375,9 +417,10 @@ function VisualizePageContent() {
           return scoreA - scoreB;
         });
         const limitedClimbs = sortedClimbs.slice(loadStartN - 1, loadEndN);
+        const partitionId = extractPartitionId(filename);
 
         setLoadingProgress(100);
-        setLoadedFiles(prev => [...prev, { name: filename, climbs: limitedClimbs }]);
+        setLoadedFiles(prev => [...prev, { name: filename, climbs: limitedClimbs, partitionId }]);
       } else {
         // Fallback for when content-length is not available
         setLoadingProgress(25);
@@ -388,7 +431,9 @@ function VisualizePageContent() {
         await new Promise(resolve => setTimeout(resolve, 50));
 
         let climbs: Climb[];
-        if (filename.endsWith('.xlsx') || filename.endsWith('.xls')) {
+        if (filename.endsWith('.sqlite') || filename.endsWith('.db')) {
+          climbs = await parseClimbSQLite(arrayBuffer);
+        } else if (filename.endsWith('.xlsx') || filename.endsWith('.xls')) {
           climbs = parseClimbExcel(arrayBuffer);
         } else {
           const text = new TextDecoder().decode(arrayBuffer);
@@ -402,9 +447,10 @@ function VisualizePageContent() {
           return scoreA - scoreB;
         });
         const limitedClimbs = sortedClimbs.slice(loadStartN - 1, loadEndN);
+        const partitionId = extractPartitionId(filename);
 
         setLoadingProgress(100);
-        setLoadedFiles(prev => [...prev, { name: filename, climbs: limitedClimbs }]);
+        setLoadedFiles(prev => [...prev, { name: filename, climbs: limitedClimbs, partitionId }]);
       }
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
@@ -438,6 +484,9 @@ function VisualizePageContent() {
       filteredClimbs = topClimbs.slice(startIndex, endIndex);
     }
   }
+
+  // Apply search filter
+  filteredClimbs = filterClimbsBySearch(filteredClimbs, searchQuery);
 
   // Apply category filter
   filteredClimbs = filteredClimbs.filter(climb => selectedCategories.has(climb.category));
@@ -630,7 +679,7 @@ function VisualizePageContent() {
                 type="file"
                 id="file-input"
                 className="hidden"
-                accept=".csv,.xlsx"
+                accept=".csv,.xlsx,.sqlite,.db"
                 multiple
                 onChange={handleFileSelect}
               />
@@ -713,7 +762,12 @@ function VisualizePageContent() {
                           {file.name}
                         </div>
                         <div className="text-xs text-green-700">
-                          {file.climbs.length} climbs loaded
+                          {file.climbs.length.toLocaleString()} climbs loaded
+                          {file.partitionId && (
+                            <span className="ml-1 px-1.5 py-0.5 bg-green-100 rounded text-green-800">
+                              {getPartitionDisplayName(file.partitionId)}
+                            </span>
+                          )}
                         </div>
                       </div>
                       <button
@@ -731,7 +785,12 @@ function VisualizePageContent() {
                 {loadedFiles.length === 0 ? (
                   'No files loaded'
                 ) : (
-                  `${loadedFiles.length} file(s) • ${allClimbs.length} total climbs`
+                  <>
+                    {`${loadedFiles.length} file(s) • ${allClimbs.length.toLocaleString()} total climbs`}
+                    {loadedFiles.filter(f => f.partitionId).length > 1 && (
+                      <span className="ml-1 text-green-700">(merged partitions)</span>
+                    )}
+                  </>
                 )}
               </div>
             </CardContent>
@@ -752,6 +811,12 @@ function VisualizePageContent() {
             </CardHeader>
             {!filtersCollapsed && (
             <CardContent className="space-y-4">
+              {/* Search */}
+              <ClimbSearch
+                onSearchChange={setSearchQuery}
+                placeholder="Search name, city, state..."
+              />
+
               {/* Score Type */}
               <div className="space-y-2">
                 <Label>Score Type</Label>
@@ -1027,6 +1092,40 @@ function VisualizePageContent() {
                   initialRadius={25}
                 />
               </div>
+
+              <div className="border-t pt-4" />
+
+              {/* Surface Filter */}
+              <ChipFilter
+                label="Surface"
+                options={SURFACE_OPTIONS}
+                selected={surfaceFilters}
+                onChange={setSurfaceFilters}
+              />
+
+              {/* Highway Type Filter */}
+              <ChipFilter
+                label="Highway Type"
+                options={HIGHWAY_TYPE_OPTIONS}
+                selected={highwayTypeFilters}
+                onChange={setHighwayTypeFilters}
+              />
+
+              {/* Cycling Access Filter */}
+              <ChipFilter
+                label="Cycling Access"
+                options={CYCLING_ACCESS_OPTIONS}
+                selected={cyclingAccessFilters}
+                onChange={setCyclingAccessFilters}
+              />
+
+              {/* Tracktype Filter */}
+              <ChipFilter
+                label="Track Type"
+                options={TRACKTYPE_OPTIONS}
+                selected={tracktypeFilters}
+                onChange={setTracktypeFilters}
+              />
 
               <div className="border-t pt-4" />
 

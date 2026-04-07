@@ -49,6 +49,7 @@ export interface Climb {
   tracktype: string;
   wayId: string;
   osmLink: string;
+  allWayIds?: string;
   connectedClimbs: string;
 
   // Elevation profile data (format: "dist,ele,grade|dist,ele,grade|...")
@@ -124,4 +125,62 @@ export interface OutputFile {
   climbCount: number;
   createdAt: Date;
   size: number;
+}
+
+/**
+ * Geographic partition for large regions
+ * Used when a region's SQLite database is split into geographic partitions
+ * to meet GitHub's 2GB limit and sql.js WASM memory constraints
+ */
+export interface Partition {
+  partition_id: string;        // e.g., "norcal", "socal", "northeast"
+  display_name: string;        // e.g., "Northern California"
+  database_file: string;
+  database_size: number;
+  database_url: string;
+  bounds?: {
+    minLat: number;
+    maxLat: number;
+    minLon: number;
+    maxLon: number;
+  } | null;
+  climb_count?: number | null;
+}
+
+/**
+ * Region metadata from index.json
+ * Supports both single-file and partitioned regions
+ */
+export interface RegionMetadata {
+  region_name: string;
+  version: string;
+  release_tag: string;
+  release_url: string;
+  climb_count: number | null;
+  elevation_errors: number | null;
+  // XLSX files
+  files: string[];
+  download_urls: string[];
+  file_sizes: number[];
+  total_size: number;
+  file_count: number;
+  has_split_files: boolean;
+  // Single database (non-split, non-partitioned)
+  database_file: string | null;
+  database_size: number | null;
+  database_url: string | null;
+  // Split database (binary chunks)
+  is_split: boolean;
+  split_files: string[] | null;
+  split_urls: string[] | null;
+  split_sizes: number[] | null;
+  split_checksums: string[] | null;
+  // Partitioned database (geographic partitions)
+  is_partitioned: boolean;
+  partition_type: 'geofabrik' | 'quadtree' | null;
+  partitions: Partition[] | null;
+  total_database_size: number | null;
+  // Dates
+  published_at: string;
+  last_updated: string | null;
 }
