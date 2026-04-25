@@ -2940,12 +2940,14 @@ def update_opentopodata_config(elevation_data_dir: Path, config_path: Path) -> b
             )
 
     # Check for ArcticDEM VRT file (raw tiles can't be used directly by OpenTopoData)
+    # OpenTopoData expects a DIRECTORY path (os.path.isdir check); it discovers
+    # the .vrt file inside. A file path produces "No dataset folder found".
     arctic_vrt = elevation_data_dir / "arctic32m-vrt" / "arctic32m.vrt"
     if arctic_vrt.exists():
         datasets.append(
             {
                 "name": "arctic32m",
-                "path": "data/arctic32m-vrt/arctic32m.vrt",
+                "path": "data/arctic32m-vrt/",
             }
         )
 
@@ -2955,7 +2957,7 @@ def update_opentopodata_config(elevation_data_dir: Path, config_path: Path) -> b
         datasets.append(
             {
                 "name": "rema32m",
-                "path": "data/rema32m-vrt/rema32m.vrt",
+                "path": "data/rema32m-vrt/",
             }
         )
 

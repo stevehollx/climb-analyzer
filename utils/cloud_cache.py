@@ -168,26 +168,22 @@ class CloudCacheManager:
         except Exception:
             return []
 
-    def load_datasets_used_from_checkpoint(self, region_name: str) -> List[str]:
+    def load_datasets_info_from_checkpoint(self, region_name: str) -> dict:
         """
-        Load datasets_used from the most recent analysis checkpoint folder.
+        Load dataset info from the most recent analysis checkpoint folder.
 
-        Args:
-            region_name: Name of the region to search for
-
-        Returns:
-            List of dataset names that were actually used, or empty list if not found
+        Returns a dict with keys "priority" and "actually_used" (lists).
+        Handles both the new dict format and legacy list-only format on disk.
         """
         import json
 
         checkpoint_base = Path("data/checkpoint_data")
+        empty = {"priority": [], "actually_used": []}
         if not checkpoint_base.exists():
-            return []
+            return empty
 
-        # Normalize region name for matching
         normalized = region_name.lower().replace(" ", "_").replace("-", "_")
 
-        # Find matching checkpoint folders (sorted by modification time, newest first)
         matching_dirs = []
         for d in checkpoint_base.iterdir():
             if d.is_dir():
@@ -196,22 +192,30 @@ class CloudCacheManager:
                     matching_dirs.append(d)
 
         if not matching_dirs:
-            return []
+            return empty
 
-        # Sort by modification time (most recent first)
         matching_dirs.sort(key=lambda x: x.stat().st_mtime, reverse=True)
 
-        # Check each for datasets_used.json
         for analysis_dir in matching_dirs:
             datasets_file = analysis_dir / "datasets_used.json"
             if datasets_file.exists():
                 try:
                     with open(datasets_file) as f:
-                        return json.load(f)
+                        data = json.load(f)
+                    if isinstance(data, list):
+                        return {"priority": [], "actually_used": list(data)}
+                    return {
+                        "priority": list(data.get("priority", [])),
+                        "actually_used": list(data.get("actually_used", [])),
+                    }
                 except Exception:
                     continue
 
-        return []
+        return empty
+
+    def load_datasets_used_from_checkpoint(self, region_name: str) -> List[str]:
+        """Backwards-compat shim — returns actually-used list only."""
+        return self.load_datasets_info_from_checkpoint(region_name).get("actually_used", [])
 
     def get_country_continent(self, country_name: str) -> Optional[str]:
         """
@@ -978,12 +982,31 @@ class CloudCacheManager:
 
         # Add elevation datasets section if available
         # Try loading from checkpoint if not provided
-        if not datasets_used:
-            datasets_used = self.load_datasets_used_from_checkpoint(location_name)
+        # Load full dataset info from checkpoint so the PR documents both the
+        # configured cascade (intent) and what actually supplied data.
+        ds_info = self.load_datasets_info_from_checkpoint(location_name)
+        priority = ds_info.get("priority", [])
+        actually_used = ds_info.get("actually_used", []) or datasets_used or []
 
-        if datasets_used:
+        if priority and actually_used and set(priority) != set(actually_used):
+            # Configured ≠ actually-used — show both so the gap is visible.
+            pr_body += "\n**Elevation Dataset Priority (configured cascade):**\n"
+            for i, ds in enumerate(priority, 1):
+                marker = " — supplied data" if ds in actually_used else ""
+                pr_body += f"{i}. {ds}{marker}\n"
+            pr_body += f"\n**Datasets that actually supplied elevations:** {', '.join(actually_used)}\n"
+            extras = [ds for ds in actually_used if ds not in priority]
+            if extras:
+                pr_body += f"Unexpected datasets outside configured priority: {', '.join(extras)}\n"
+        elif priority:
+            # Configured == actually-used (or no actually-used recorded) — one list is enough.
             pr_body += "\n**Elevation Datasets Used (priority order):**\n"
-            for i, ds in enumerate(datasets_used, 1):
+            for i, ds in enumerate(priority, 1):
+                pr_body += f"{i}. {ds}\n"
+        elif actually_used:
+            # Legacy checkpoint (no priority recorded) — show actually-used only.
+            pr_body += "\n**Elevation Datasets Used:**\n"
+            for i, ds in enumerate(actually_used, 1):
                 pr_body += f"{i}. {ds}\n"
 
         # Add comparison info if updating existing analysis
@@ -1077,6 +1100,12 @@ class CloudCacheManager:
 
         print(f"\n  Checking for existing release: {release_tag}")
 
+        # Parse version and error count from first xlsx file
+        if xlsx_files:
+            local_version, local_errors = self.parse_version_and_errors(xlsx_files[0].name)
+        else:
+            local_version, local_errors = app_version, 0
+
         # Check for existing release
         existing_release = self.github.get_release_by_tag(release_tag)
 
@@ -1094,12 +1123,6 @@ class CloudCacheManager:
         else:
             # Create new release
             print(f"  Creating release: {release_tag}")
-
-            # Parse version and error count from first xlsx file
-            if xlsx_files:
-                local_version, local_errors = self.parse_version_and_errors(xlsx_files[0].name)
-            else:
-                local_version, local_errors = app_version, 0
 
             # Build release body
             date_str = datetime.now().strftime("%Y-%m-%d")
@@ -1199,29 +1222,51 @@ class CloudCacheManager:
         # Upload all files as release assets
         print(f"\n  Uploading files to release...")
 
+        sqlite_gz_files = local_files.get("sqlite_gz", []) or []
+
         all_files = []
         all_files.extend(xlsx_files)
-        all_files.extend(sqlite_files)
+        # Upload ONLY the gzipped sqlite. Raw .sqlite is 3-5x larger and
+        # consumers can decompress. Only fall back to raw when no gz exists
+        # (e.g. if gzip step failed — we shouldn't strand users without any db).
+        if sqlite_gz_files:
+            all_files.extend(sqlite_gz_files)
+        elif sqlite_files:
+            print("  ⚠️  No sqlite.gz found — uploading raw .sqlite as fallback")
+            all_files.extend(sqlite_files)
         if local_files.get("csv"):
             all_files.append(local_files["csv"])
 
-        # Add .sha256 checksum file if split database exists
-        if is_split_db and sqlite_files:
-            # Checksum file is named {original_sqlite_name}.sha256
-            # e.g., California.sqlite.sha256 (not California.sqlite.001.sha256)
+        # Add .sha256 checksum file if raw sqlite was split AND we're uploading
+        # the raw form (only happens in the fallback-no-gz case above).
+        if is_split_db and sqlite_files and not sqlite_gz_files:
             first_chunk = sorted(sqlite_files, key=lambda x: x.name)[0]
             base_sqlite_name = first_chunk.name.rsplit('.', 1)[0]  # Remove .001
             checksum_file = first_chunk.parent / f"{base_sqlite_name}.sha256"
             if checksum_file.exists():
                 all_files.append(checksum_file)
 
+        # Add .sha256 checksum file for split gzipped sqlite
+        is_split_gz = any(
+            re.match(r".*\.sqlite\.gz\.\d{3}$", str(f.name)) for f in sqlite_gz_files
+        )
+        if is_split_gz and sqlite_gz_files:
+            first_gz_chunk = sorted(sqlite_gz_files, key=lambda x: x.name)[0]
+            base_gz_name = first_gz_chunk.name.rsplit('.', 1)[0]  # Remove .001
+            gz_checksum_file = first_gz_chunk.parent / f"{base_gz_name}.sha256"
+            if gz_checksum_file.exists() and gz_checksum_file not in all_files:
+                all_files.append(gz_checksum_file)
+
         uploaded_count = 0
         for local_file in all_files:
             # Determine content type
+            name_lower = local_file.name.lower()
             if local_file.suffix == ".xlsx":
                 content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            elif name_lower.endswith(".sqlite.gz") or re.match(r'.*\.sqlite\.gz\.\d{3}$', name_lower):
+                content_type = "application/gzip"
             elif local_file.suffix == ".sqlite" or re.match(r'.*\.sqlite\.\d{3}$', local_file.name):
-                # Handle both single .sqlite and split chunks (.sqlite.001, .sqlite.002, etc.)
+                # Raw .sqlite single-file or split chunks (.sqlite.001, .sqlite.002, ...)
                 content_type = "application/x-sqlite3"
             elif local_file.name.endswith(".sha256"):
                 content_type = "text/plain"
@@ -1320,10 +1365,31 @@ class CloudCacheManager:
 
 """
 
-        # Elevation datasets section
-        if datasets_used:
+        # Elevation datasets section — show BOTH the configured cascade (intent)
+        # and what actually supplied data. They differ when higher-priority datasets
+        # fully covered the region (e.g. NED covers all of Kansas → SRTM never queried).
+        ds_info = self.load_datasets_info_from_checkpoint(location_name)
+        priority = ds_info.get("priority", [])
+        actually_used = ds_info.get("actually_used", []) or (datasets_used or [])
+
+        if priority and actually_used and set(priority) != set(actually_used):
+            md += "## Elevation datasets (configured cascade):\n"
+            for i, dataset in enumerate(priority, 1):
+                marker = " — supplied data" if dataset in actually_used else ""
+                md += f"{i}. {dataset}{marker}\n"
+            md += f"\n**Datasets that actually supplied elevations:** {', '.join(actually_used)}\n"
+            extras = [ds for ds in actually_used if ds not in priority]
+            if extras:
+                md += f"\nUnexpected datasets outside configured priority: {', '.join(extras)}\n"
+            md += "\n"
+        elif priority:
+            md += "## Elevation datasets (configured cascade):\n"
+            for i, dataset in enumerate(priority, 1):
+                md += f"{i}. {dataset}\n"
+            md += "\n"
+        elif actually_used:
             md += "## Elevation datasets used:\n"
-            for i, dataset in enumerate(datasets_used, 1):
+            for i, dataset in enumerate(actually_used, 1):
                 md += f"{i}. {dataset}\n"
             md += "\n"
 
@@ -1374,11 +1440,47 @@ class CloudCacheManager:
         # Sanitize location name for filename
         sanitized_name = self.sanitize_name(location_name).lower()
 
-        # Use geographic path for US states, otherwise use releases folder
-        if scope_type == "region" and country.lower() in ["usa", "united states", "united states of america"]:
+        # Determine the geographic README path so regions live under their
+        # continent/country folders in main branch (the repo's README index
+        # is keyed off these paths). Keep `releases/<name>.md` only as a
+        # last-resort fallback.
+        md_filename = None
+        # US states: pass through the long-established convention.
+        if scope_type == "region" and country and country.lower() in ["usa", "united states", "united states of america"]:
             md_filename = f"north-america/united-states-of-america/{sanitized_name}/README.md"
         else:
-            md_filename = f"releases/{sanitized_name}.md"
+            # location_name for subregions is typically a canonical path like
+            # "canada/alberta" or "north-america/mexico". Map it into the repo.
+            raw = (location_name or "").strip()
+            if "/" in raw:
+                # e.g. "canada/alberta" -> ["canada", "alberta"]
+                parts = [self.sanitize_name(p).lower() for p in raw.split("/") if p]
+                if parts:
+                    CONTINENT_SLUGS = {
+                        "north-america", "south-america", "central-america",
+                        "europe", "africa", "asia",
+                        "oceania", "australia-oceania", "antarctica",
+                    }
+                    # Canonical paths from geo_lookup typically start with the
+                    # parent country ("spain/extremadura", "canada/alberta") or
+                    # continent-then-country ("north-america/mexico"). When the
+                    # first segment is a country, resolve its actual continent
+                    # via geo_lookup instead of assuming north-america.
+                    if parts[0] not in CONTINENT_SLUGS:
+                        country_name = parts[0].replace("-", " ")
+                        continent = self.get_country_continent(country_name)
+                        if continent and continent != "Unknown":
+                            parts = [self.sanitize_name(continent).lower()] + parts
+                        else:
+                            print(
+                                f"    ⚠️  Could not resolve continent for '{country_name}' — "
+                                f"falling back to releases/ path"
+                            )
+                            parts = None
+                    if parts:
+                        md_filename = "/".join(parts) + "/README.md"
+            if not md_filename:
+                md_filename = f"releases/{sanitized_name}.md"
 
         # Create unique branch name
         timestamp = int(datetime.now().timestamp())

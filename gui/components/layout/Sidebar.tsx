@@ -10,18 +10,22 @@ import {
   Settings,
   Trash2,
   BookOpen,
-  Mountain
+  Mountain,
+  Cloud,
+  Sliders,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navigation = [
   { name: 'Dashboard', href: '/', icon: Home },
+  { name: 'Data Library', href: '/data', icon: Cloud },
   { name: 'Download Data', href: '/download', icon: Download },
   { name: 'Analyze Climbs', href: '/analyze', icon: Play },
   { name: 'Visualize Climbs', href: '/visualize', icon: Map },
   { name: 'Delete Data', href: '/manage', icon: Trash2 },
   { name: 'Documentation', href: '/docs', icon: BookOpen },
   { name: 'Configuration', href: '/config', icon: Settings },
+  { name: 'Preferences', href: '/settings', icon: Sliders },
 ];
 
 export function Sidebar() {

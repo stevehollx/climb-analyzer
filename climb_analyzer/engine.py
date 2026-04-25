@@ -309,15 +309,21 @@ def get_configured_osm_file_path():
         return None
 
 
-def find_osm_file_for_region(region_name: str):
+def find_osm_file_for_region(region_name: str, canonical_path: Optional[str] = None):
     """
     Find OSM PBF file matching a region name.
 
     Searches data/planet_osm_data/ directory for files matching the region name.
     Handles various naming conventions (lowercase, with/without hyphens, etc.)
 
+    For ambiguous regions (e.g., Georgia the US state vs Georgia the country),
+    the canonical_path parameter is used to disambiguate and prevent using the
+    wrong PBF file.
+
     Args:
         region_name: Name of region (e.g., "Antarctica", "Alaska", "Vermont")
+        canonical_path: Optional full path from geo_lookup (e.g., "us/georgia"
+                       or "europe/georgia") used to disambiguate collisions
 
     Returns:
         Path to matching PBF file, or None if not found
@@ -336,6 +342,23 @@ def find_osm_file_for_region(region_name: str):
     # Normalize region name to lowercase, replace spaces and underscores with hyphens
     # Handles: "South Carolina" -> "south-carolina", "south_carolina" -> "south-carolina"
     normalized = region_name.lower().replace(" ", "-").replace("_", "-")
+
+    # If a canonical path is provided and the stem is known ambiguous, check
+    # for the disambiguated filename first (e.g., "us_georgia-latest.osm.pbf").
+    from climb_analyzer.data.osm_downloader import AMBIGUOUS_STEMS
+    if canonical_path and normalized in AMBIGUOUS_STEMS:
+        # Extract the immediate parent from canonical path
+        # e.g., "us/georgia" -> "us", "europe/georgia" -> "europe"
+        parts = canonical_path.split("/")
+        if len(parts) >= 2:
+            parent = parts[-2]
+            disambiguated = planet_dir / f"{parent}_{normalized}-latest.osm.pbf"
+            if disambiguated.exists():
+                return disambiguated
+            # Disambiguated file doesn't exist - do NOT fall back to the
+            # bare name, as it may be the wrong region's file. Return None
+            # so the caller knows to download the correct one.
+            return None
 
     # Try exact match first
     pattern = f"{normalized}-latest.osm.pbf"
@@ -2437,12 +2460,31 @@ DATASET_PRIORITY_BY_REGION = {
     "West Virginia": ["ned10m", "srtm30m"],
     "Wisconsin": ["ned10m", "srtm30m"],
     "Wyoming": ["ned10m", "srtm30m"],
-    # Alaska - Local mode has full Arctic datasets
+    # Alaska - ArcticDEM primary (best for >60°N), AW3D30 fallback
     "Alaska": ["arctic32m", "aw3d30"],
-    # Canada - split by latitude
+    # Canada country-level - split by latitude
     "Canada": ["srtm30m", "aw3d30"],  # Southern Canada
     "Canada (>60°N)": ["arctic32m", "aw3d30"],  # Northern Canada
-    # Greenland - Arctic (all >60N) - ArcticDEM only (no other datasets available)
+    # Canadian provinces - SRTM primary, AW3D30 fallback. Provinces that span
+    # or touch 60°N get arctic32m as tertiary — opentopodata multi-dataset mode
+    # serves SRTM where it has coverage (<=60°N) and falls through to arctic32m
+    # for coordinates above 60°N where SRTM returns null.
+    "British Columbia": ["srtm30m", "arctic32m", "aw3d30"],     # touches 60.0°N
+    "Alberta": ["srtm30m", "arctic32m", "aw3d30"],              # touches 60.0°N
+    "Saskatchewan": ["srtm30m", "arctic32m", "aw3d30"],         # touches 60.0°N
+    "Manitoba": ["srtm30m", "arctic32m", "aw3d30"],             # touches 60.0°N
+    "Quebec": ["srtm30m", "arctic32m", "aw3d30"],               # to 62.6°N
+    "Newfoundland And Labrador": ["srtm30m", "arctic32m", "aw3d30"],  # to 60.5°N
+    # Provinces entirely south of 60°N — no arctic coverage needed
+    "Ontario": ["srtm30m", "aw3d30"],                           # max 57.5°N
+    "New Brunswick": ["srtm30m", "aw3d30"],                     # max 48.4°N
+    "Nova Scotia": ["srtm30m", "aw3d30"],                       # max 47.9°N
+    "Prince Edward Island": ["srtm30m", "aw3d30"],              # max 47.7°N
+    # Canadian territories - ArcticDEM primary (all or mostly above 60°N)
+    "Yukon": ["arctic32m", "aw3d30"],
+    "Northwest Territories": ["arctic32m", "aw3d30"],
+    "Nunavut": ["arctic32m", "aw3d30"],
+    # Greenland - ArcticDEM only (no other datasets have coverage)
     "Greenland": ["arctic32m"],
     # Nordic countries - Arctic with latitude-based switching
     "Iceland": ["arctic32m", "aw3d30"],  # All Iceland is >60N
@@ -2479,9 +2521,15 @@ def get_dataset_priority_for_region(
     # Select appropriate priority dict
     priority_dict = DATASET_PRIORITY_BY_REGION_CLOUD if cloud_mode else DATASET_PRIORITY_BY_REGION
 
+    # Strip continent/country prefix from canonical paths like "us/colorado",
+    # "canada/british-columbia", "north-america/greenland". Without this, the
+    # title-cased lookup becomes "Us/Colorado" and silently falls to _default,
+    # causing arctic32m (and other region-specific priorities) to be skipped.
+    lookup_name = region_name.split("/")[-1] if region_name and "/" in region_name else region_name
+
     # Normalize region name to title case for lookup
     # This ensures "antarctica" matches "Antarctica" in the dict
-    normalized_region = region_name.replace("-", " ").title() if region_name else None
+    normalized_region = lookup_name.replace("-", " ").title() if lookup_name else None
 
     # Special handling for ambiguous region names that exist in multiple places
     if lat is not None and normalized_region == "Georgia":
@@ -2552,6 +2600,11 @@ class FastElevationFetcher:
 
             # Use region-based priority with cloud mode flag
             self.dataset_priority = get_dataset_priority_for_region(region_name, lat, cloud_mode)
+
+            # Preserve the configured cascade before server-availability filtering
+            # so downstream consumers (checkpoint, PR body) can document intent
+            # even when the local server is missing a dataset this run.
+            self.configured_priority = list(self.dataset_priority)
 
             # Query server for available datasets and filter priority list
             available_datasets = get_available_datasets_from_server()
@@ -3021,12 +3074,16 @@ class FastElevationFetcher:
         return [ds for ds in self.dataset_cascade if ds not in self.unavailable_datasets]
 
     def get_datasets_used(self) -> List[str]:
-        """Get list of datasets that actually returned elevation data.
+        """Get list of datasets that actually returned elevation data, in priority order.
 
         Returns:
-            Sorted list of dataset names that returned valid elevation data
+            List of dataset names that returned valid elevation data, ordered by
+            their position in the dataset_cascade (primary first). Datasets that
+            returned data but aren't in the cascade are appended at the end.
         """
-        return sorted(self.datasets_used)
+        in_cascade = [ds for ds in self.dataset_cascade if ds in self.datasets_used]
+        extras = sorted(self.datasets_used - set(self.dataset_cascade))
+        return in_cascade + extras
 
     def _fetch_single_batch(
         self,
@@ -3053,14 +3110,12 @@ class FastElevationFetcher:
                 coordinates, self.multi_dataset_url, max_retries, base_delay
             )
 
-            # If multi-dataset mode succeeded, return immediately
+            # If multi-dataset mode succeeded, return immediately.
+            # datasets_used is populated from the per-result "dataset" field
+            # in _fetch_single_batch_from_endpoint — don't blanket-add the cascade here.
             if result is not None:
                 valid_count = sum(1 for e in result if e is not None)
                 if valid_count > 0:
-                    # Track all datasets in cascade (server tried them all)
-                    for ds in self.dataset_cascade:
-                        self.datasets_used.add(ds)
-                    # DEBUG: Log success
                     logger.info(
                         f"[MULTI-DS] SUCCESS: Got {valid_count}/{len(coordinates)} elevations from multi-dataset query"
                     )
@@ -3419,6 +3474,11 @@ class FastElevationFetcher:
                 for result in results:
                     if result and "elevation" in result and result["elevation"] is not None:
                         elevations.append(float(result["elevation"]))
+                        # Record actual dataset that supplied this elevation so
+                        # datasets_used reflects real usage, not just cascade config.
+                        ds = result.get("dataset")
+                        if ds:
+                            self.datasets_used.add(ds)
                     else:
                         elevations.append(None)
 
@@ -11107,10 +11167,17 @@ def process_region_without_chunking(
         successful_datasets = elevation_fetcher.get_successful_datasets()
         error_logger.set_successful_datasets(successful_datasets)
 
-        # Save datasets that actually returned elevation data (for PR body in cloud cache)
+        # Save datasets info: configured priority + actually-used.
+        # Use configured_priority (pre-server-filter) so intent is documented
+        # even if the local opentopodata server is missing a tier this run.
         datasets_used = elevation_fetcher.get_datasets_used()
-        if datasets_used:
-            persistence.save_datasets_used(datasets_used)
+        datasets_priority = list(
+            getattr(elevation_fetcher, "configured_priority", None)
+            or getattr(elevation_fetcher, "dataset_priority", [])
+            or []
+        )
+        if datasets_used or datasets_priority:
+            persistence.save_datasets_used(datasets_used, priority=datasets_priority)
 
         # DON'T clear elevation progress - keep it for resume functionality
         # The elevation_data.db file persists in checkpoints folder
@@ -11237,10 +11304,19 @@ def process_region_without_chunking(
     if scope_type == "address":
         scope_info = metadata.get("address", "Unknown Address")
     elif scope_type in ("country", "region"):
-        # Try to get region name from metadata
+        # Try to get region name from metadata, then from the persistence
+        # analysis_id as a fallback (e.g. "Kansas_all_region_1776687510" -> "Kansas")
+        # since scope_info drives the output filename prefix.
         region_name = (
             metadata.get("region_name") or metadata.get("country") or metadata.get("address")
         )
+        if not region_name and persistence is not None:
+            aid = getattr(persistence, "analysis_id", "") or ""
+            # analysis_id format: "<RegionName>_<surface>_<scope>_<timestamp>"
+            for suffix in ("_all_region_", "_all_country_", "_all_address_"):
+                if suffix in aid:
+                    region_name = aid.split(suffix, 1)[0]
+                    break
         if region_name:
             # Extract just the region name from path formats like "us > hawaii" or "europe/france"
             if " > " in region_name:
@@ -11250,7 +11326,7 @@ def process_region_without_chunking(
             else:
                 scope_info = region_name
             # Convert to title case for cleaner filenames (e.g., "hawaii" -> "Hawaii")
-            scope_info = scope_info.replace("-", " ").title()
+            scope_info = scope_info.replace("-", " ").replace("_", " ").title()
 
     # Generate results
     print("\nGenerating results...")
@@ -11492,6 +11568,7 @@ def analyze_area(
     # NOTE: For address searches, we don't have formatted_address yet (geocoding happens later)
     # So we'll need to defer OSM file selection until after geocoding
     region_name = None  # Will be determined later for address searches
+    region_canonical_path = None  # Full path like "us/georgia" for disambiguation
 
     if scope_type != "address":
         # For state/country searches, we have formatted_address already
@@ -11509,25 +11586,41 @@ def analyze_area(
                 # Check if this part is a US state using geo_lookup
                 if is_us_state(part):
                     region_name = part
+                    region_canonical_path = f"us/{part.lower().replace(' ', '-')}"
                     break
                 # Try title case match
                 part_title = part.title()
                 if is_us_state(part_title):
                     region_name = part_title
+                    region_canonical_path = f"us/{part_title.lower().replace(' ', '-')}"
                     break
         elif scope_type == "region" and address:
             # For region-based analysis, extract just the region name (not full path)
             # address format is like "antarctica", "europe > andorra", or "us/north-carolina"
             if "/" in address:
+                region_canonical_path = address  # Preserve "us/north-carolina"
                 region_name = address.split("/")[-1]  # "us/north-carolina" -> "north-carolina"
             elif " > " in address:
-                region_name = address.split(" > ")[-1]  # "europe > andorra" -> "andorra"
+                # "us > georgia" format - convert to canonical path
+                parts = address.split(" > ")
+                region_canonical_path = "/".join(p.strip().lower().replace(" ", "-") for p in parts)
+                region_name = parts[-1]  # "europe > andorra" -> "andorra"
             else:
                 region_name = address
             # Convert to title case for cleaner display/filenames
             region_name = region_name.replace("-", " ").title()
         else:
-            region_name = country if country else address
+            # Country-scope: 'address' can be a canonical path like "canada/alberta".
+            # Strip any continent/country prefix and title-case so downstream
+            # consumers (analysis_id, metadata, filenames) get a clean region name.
+            raw = country if country else address
+            if raw and "/" in raw:
+                region_canonical_path = raw
+                raw = raw.split("/")[-1]
+            if raw:
+                region_name = raw.replace("-", " ").replace("_", " ").title()
+            else:
+                region_name = raw
     # For address searches, region_name stays None and will be determined after geocoding
 
     # For address searches, geocode FIRST to get the state name
@@ -11778,7 +11871,7 @@ def analyze_area(
                 osm_region_name = parts[-1]  # Extract last part for OSM file lookup
 
             print(f"Looking for OSM file for region: {osm_region_name}")
-            osm_file = find_osm_file_for_region(osm_region_name)
+            osm_file = find_osm_file_for_region(osm_region_name, canonical_path=region_canonical_path)
             if osm_file:
                 print(f"✓ Found region-specific OSM file: {osm_file}")
             else:
@@ -12019,16 +12112,19 @@ def analyze_area(
             min_lon = center_lon - lon_offset
             max_lon = center_lon + lon_offset
         else:
-            # For state/country, get bbox from region data
+            # For state/country, get bbox from region data.
+            # Use canonical path (e.g., "us/georgia") when available to avoid
+            # ambiguity with same-named countries (e.g., Georgia the country).
             from climb_analyzer.data.manager import DataManager
 
             manager = DataManager()
 
             is_state = scope_type == "region"
-            bounds = manager.get_region_bounds(region_name or address, is_state=is_state)
+            bounds_lookup_name = region_canonical_path or region_name or address
+            bounds = manager.get_region_bounds(bounds_lookup_name, is_state=is_state)
 
             if not bounds:
-                raise ValueError(f"Could not determine bounds for region: {region_name or address}")
+                raise ValueError(f"Could not determine bounds for region: {bounds_lookup_name}")
 
             # get_region_bounds returns (lat_min, lon_min, lat_max, lon_max)
             min_lat, min_lon, max_lat, max_lon = bounds
@@ -12404,10 +12500,19 @@ def complete_analysis_from_segments(
     if scope_type == "address":
         scope_info = metadata.get("address", "Unknown Address")
     elif scope_type in ("country", "region"):
-        # Try to get region name from metadata
+        # Fallback chain: region_name → country → address → persistence.analysis_id.
+        # Missing region_name in metadata produces "region_climbs_*" output files
+        # which is confusing and wastes upload bandwidth. analysis_id always embeds
+        # the region name (e.g. "Kansas_all_region_1776687510" → "Kansas").
         region_name = (
             metadata.get("region_name") or metadata.get("country") or metadata.get("address")
         )
+        if not region_name and persistence is not None:
+            aid = getattr(persistence, "analysis_id", "") or ""
+            for suffix in ("_all_region_", "_all_country_", "_all_address_"):
+                if suffix in aid:
+                    region_name = aid.split(suffix, 1)[0]
+                    break
         if region_name:
             # Extract just the region name from path formats like "us > hawaii" or "europe/france"
             if " > " in region_name:
@@ -12417,7 +12522,7 @@ def complete_analysis_from_segments(
             else:
                 scope_info = region_name
             # Convert to title case for cleaner filenames (e.g., "hawaii" -> "Hawaii")
-            scope_info = scope_info.replace("-", " ").title()
+            scope_info = scope_info.replace("-", " ").replace("_", " ").title()
 
     # Print results WITH analysis center for location lookup
     print("\nGenerating results...")
@@ -13641,6 +13746,34 @@ class ClimbAnalyzer:
         units_str = units if units in ("imperial", "metric") else "imperial"
         filter_str = f"{surface_str}_{access_str}_{units_str}"
 
+        # Recover scope_info from persistence.analysis_id if caller didn't pass it.
+        # analysis_id format: "<RegionName>_<surface>_<scope>_<timestamp>"
+        # e.g. "Ohio_all_region_1776700362" → "Ohio". For canonical paths that
+        # had slashes stripped during sanitization (e.g. "canadaalberta_all_country_..."),
+        # peel off known continent/country prefixes to recover the trailing region.
+        if not scope_info and persistence is not None:
+            aid = getattr(persistence, "analysis_id", "") or ""
+            for suffix in ("_all_region_", "_all_country_", "_all_address_"):
+                if suffix in aid:
+                    recovered = aid.split(suffix, 1)[0]
+                    if recovered:
+                        recovered_lower = recovered.lower()
+                        # Strip known parent prefixes left over from "canada/alberta"
+                        # -> "canadaalberta" sanitization.
+                        for prefix in (
+                            "northamerica", "southamerica", "europe", "africa",
+                            "asia", "oceania", "australia", "antarctica",
+                            "canada", "us", "mexico",
+                        ):
+                            if recovered_lower.startswith(prefix) and len(recovered_lower) > len(prefix):
+                                recovered = recovered[len(prefix):]
+                                break
+                        scope_info = recovered.replace("_", " ").replace("-", " ").title()
+                        print(
+                            f"  ℹ️  Recovered scope_info='{scope_info}' from persistence.analysis_id"
+                        )
+                        break
+
         # Extract safe name from scope_info (e.g., "France", "Colorado", etc.)
         if scope_info:
             safe_name = "".join(
@@ -13652,6 +13785,10 @@ class ClimbAnalyzer:
                 safe_name = "region"
         else:
             safe_name = "region"
+            print(
+                f"⚠️  WARN: scope_info was None/empty AND persistence.analysis_id lookup failed — "
+                f"output files will use 'region' prefix."
+            )
 
         base_filename = f"{safe_name}_climbs_{filter_str}_{date_str}"
 
@@ -13665,19 +13802,27 @@ class ClimbAnalyzer:
         elif elevation_errors == 0 and __version__:
             suffix += "_e0000"
 
-        # Excel limits: 1,048,576 rows max, 100MB target file size
+        # Excel limits: 1,048,576 rows max.
+        # ROWS_PER_FILE is set well below that, primarily to bound the amount
+        # of in-flight data that could be lost if the process is killed mid-write.
+        # Smaller files also mean each file finalizes to disk sooner, which
+        # matters because write-only openpyxl still keeps the current sheet's
+        # xml worksheet stream open until wb.save().
         MAX_EXCEL_ROWS = 1048576
-        MAX_FILE_SIZE_MB = 100.0
-        ROWS_PER_FILE = 950000  # Safety margin below Excel limit
+        ROWS_PER_FILE = 500000  # Lowered from 950K for better crash resilience
+
+        # Import openpyxl directly so we can use write_only mode (memory-flat
+        # streaming writer). pandas.ExcelWriter does not expose write_only.
+        from openpyxl import Workbook
 
         row_num = 0
-        batch_rows = []
-        excel_batch_size = 50000
         created_files = []
         current_file_num = 1
-        current_writer = None
+        current_wb = None
+        current_ws = None
         current_excel_file = None
         current_file_rows = 0
+        header_keys = None  # Column headers, captured from the first row built
 
         # Track column widths during streaming write (memory-efficient)
         column_widths = {}  # {column_letter: max_width}
@@ -13704,65 +13849,114 @@ class ClimbAnalyzer:
                 else:
                     column_widths[col_letter] = max(column_widths[col_letter], value_width)
 
-        def _apply_excel_formatting(writer):
-            """Apply auto-sizing and auto-filter to Excel worksheet"""
+        def _apply_excel_formatting(worksheet):
+            """Apply tracked column widths to a write-only worksheet.
+
+            Note: write-only worksheets do not support auto_filter on
+            worksheet.dimensions (dimensions are not computed until save),
+            and column widths must be set BEFORE rows are appended. This
+            function is called when the sheet is fresh, right after header.
+            """
             try:
-                worksheet = writer.sheets["Climbs"]
-
-                # Apply auto-filter to header row
-                worksheet.auto_filter.ref = worksheet.dimensions
-
-                # Apply tracked column widths (no need to read all cells)
+                # Apply tracked column widths
                 for col_letter, max_width in column_widths.items():
-                    # Add padding and cap at reasonable width
                     adjusted_width = min(max_width + 2, 50)
                     worksheet.column_dimensions[col_letter].width = adjusted_width
             except Exception as e:
-                # Don't fail if formatting fails
                 print(f"   ⚠️  Warning: Could not apply Excel formatting: {e}")
 
-        def _create_new_file():
-            """Helper to create a new Excel file when splitting"""
-            nonlocal current_file_num, current_writer, current_excel_file, current_file_rows, column_widths
+        def _finalize_current_file():
+            """Save and close the current workbook atomically via temp file.
 
-            # Close previous file if exists
-            if current_writer is not None:
-                _apply_excel_formatting(current_writer)
-                current_writer.close()
+            Writing to a .tmp file and renaming on success ensures the
+            visible .xlsx file is either a complete valid file or absent -
+            never a truncated 2KB zip header. If the process dies during
+            save, the .tmp file is left behind and the original (if any)
+            is untouched.
+            """
+            nonlocal current_wb, current_ws, current_excel_file, current_file_rows
+
+            if current_wb is None:
+                return
+
+            tmp_path = current_excel_file.with_suffix(".xlsx.tmp")
+            try:
+                current_wb.save(str(tmp_path))
+                # Atomic rename - the final file only appears when save succeeded
+                tmp_path.replace(current_excel_file)
                 created_files.append(current_excel_file)
                 file_size_mb = current_excel_file.stat().st_size / (1024**2)
                 print(
                     f"   ✓ Saved {current_excel_file.name} ({current_file_rows:,} rows, {file_size_mb:.1f} MB)"
                 )
+            finally:
+                # Drop references so the workbook (and any internal buffers)
+                # can be garbage collected before we start the next one
+                current_wb = None
+                current_ws = None
+                if tmp_path.exists():
+                    try:
+                        tmp_path.unlink()
+                    except Exception:
+                        pass
+                gc.collect()
 
-            # Create new file
-            # Format: {base}{suffix}.xlsx for first file, {base}{suffix}-2.xlsx for subsequent
+        def _create_new_file():
+            """Helper to create a new Excel file when splitting."""
+            nonlocal current_file_num, current_wb, current_ws, current_excel_file, current_file_rows, column_widths
+
+            # Finalize the previous file (atomic rename via .tmp)
+            _finalize_current_file()
+
+            # Pick filename: {base}{suffix}.xlsx for single-file outputs,
+            # {base}{suffix}-N.xlsx for split outputs
             if current_file_num == 1 and total_filtered <= ROWS_PER_FILE:
-                # Single file expected - no numbering
                 current_excel_file = output_dir / f"{base_filename}{suffix}.xlsx"
             elif current_file_num == 1:
-                # First of multiple files
                 current_excel_file = output_dir / f"{base_filename}{suffix}-1.xlsx"
             else:
                 current_excel_file = output_dir / f"{base_filename}{suffix}-{current_file_num}.xlsx"
 
-            # Protect against overwriting: rename existing file to .backup
+            # Protect against overwriting existing files: rename to .backup
             if current_excel_file.exists():
                 backup_file = current_excel_file.with_suffix(".xlsx.backup")
                 if backup_file.exists():
-                    backup_file.unlink()  # Remove old backup
+                    backup_file.unlink()
                 current_excel_file.rename(backup_file)
                 print(f"   ℹ️  Existing file renamed to {backup_file.name}")
 
-            current_writer = pd.ExcelWriter(current_excel_file, engine="openpyxl")
+            # Use write_only mode: rows are serialized to XML and streamed
+            # to a temp file on disk as they are appended, so memory stays
+            # flat regardless of total row count.
+            current_wb = Workbook(write_only=True)
+            current_ws = current_wb.create_sheet("Climbs")
             current_file_rows = 0
             current_file_num += 1
 
-            # Reset column width tracking for new file
+            # Reset column width tracking for the new file
             column_widths.clear()
 
         # Create first file
         _create_new_file()
+
+        def _write_header_if_needed(row_dict):
+            """Write header row when the sheet is empty and apply formatting.
+
+            In write_only mode, column widths must be set before any rows are
+            appended, so we apply formatting here based on the header row's
+            own width tracking. Column widths are then refined per-row as data
+            flows through.
+            """
+            nonlocal header_keys
+            if current_file_rows > 0:
+                return
+            header_keys = list(row_dict.keys())
+            # Track header widths
+            _track_column_widths(row_dict, is_header=True)
+            # Apply initial column widths based on header (rows will refine these,
+            # but only the values set *before* first append take effect)
+            _apply_excel_formatting(current_ws)
+            current_ws.append(header_keys)
 
         with open(final_sorted_file.name, "rb") as f:
             with tqdm(
@@ -13775,31 +13969,9 @@ class ClimbAnalyzer:
                         for climb in batch_climbs:
                             # Check if we need to start a new file
                             if current_file_rows >= ROWS_PER_FILE:
-                                # Flush current batch before switching files
-                                if batch_rows:
-                                    batch_df = pd.DataFrame(batch_rows)
-                                    if current_file_rows == len(batch_rows):
-                                        # First batch in file
-                                        batch_df.to_excel(
-                                            current_writer,
-                                            sheet_name="Climbs",
-                                            index=False,
-                                            startrow=0,
-                                        )
-                                    else:
-                                        # Append without headers
-                                        batch_df.to_excel(
-                                            current_writer,
-                                            sheet_name="Climbs",
-                                            index=False,
-                                            startrow=current_file_rows - len(batch_rows) + 1,
-                                            header=False,
-                                        )
-                                    del batch_df
-                                    batch_rows = []
-                                    gc.collect()
-
-                                # Create new file
+                                # Finalize current file (atomic save) before
+                                # starting the next split. This ensures each
+                                # completed split is fully on disk.
                                 _create_new_file()
 
                             # Convert units
@@ -13897,70 +14069,29 @@ class ClimbAnalyzer:
                                 or "",
                             }
 
-                            # Track column widths for this row (streaming-friendly)
-                            _track_column_widths(row, is_header=(current_file_rows == 0))
+                            # Write header on first row of a new file, then
+                            # append this row. Both happen via the write-only
+                            # worksheet which streams to a temp file on disk,
+                            # so memory stays flat regardless of row count.
+                            _write_header_if_needed(row)
+                            _track_column_widths(row, is_header=False)
 
-                            batch_rows.append(row)
+                            # Use consistent column order from the header
+                            current_ws.append([row[k] for k in header_keys])
+
                             row_num += 1
                             current_file_rows += 1
                             pbar.update(1)
 
-                            # Write batch to Excel when full
-                            if len(batch_rows) >= excel_batch_size:
-                                batch_df = pd.DataFrame(batch_rows)
-                                if current_file_rows == len(batch_rows):
-                                    # First batch in file
-                                    batch_df.to_excel(
-                                        current_writer, sheet_name="Climbs", index=False, startrow=0
-                                    )
-                                else:
-                                    # Append without headers
-                                    batch_df.to_excel(
-                                        current_writer,
-                                        sheet_name="Climbs",
-                                        index=False,
-                                        startrow=current_file_rows - len(batch_rows) + 1,
-                                        header=False,
-                                    )
-                                del batch_df
-                                batch_rows = []
-                                gc.collect()
-
                 except EOFError:
                     pass
-
-                # Write final batch
-                if batch_rows:
-                    batch_df = pd.DataFrame(batch_rows)
-                    if current_file_rows == len(batch_rows):
-                        # First/only batch in file
-                        batch_df.to_excel(
-                            current_writer, sheet_name="Climbs", index=False, startrow=0
-                        )
-                    else:
-                        batch_df.to_excel(
-                            current_writer,
-                            sheet_name="Climbs",
-                            index=False,
-                            startrow=current_file_rows - len(batch_rows) + 1,
-                            header=False,
-                        )
-                    del batch_df, batch_rows
-                    gc.collect()
 
                 # Ensure progress bar shows 100%
                 pbar.n = pbar.total
                 pbar.refresh()
 
-        # Close final file
-        if current_writer is not None:
-            _apply_excel_formatting(current_writer)
-            current_writer.close()
-            created_files.append(current_excel_file)
-            file_size_mb = current_excel_file.stat().st_size / (1024**2)
-            print(
-                f"   ✓ Saved {current_excel_file.name} ({current_file_rows:,} rows, {file_size_mb:.1f} MB)"
-            )
+        # Finalize the last file (atomic save via .tmp rename)
+        _finalize_current_file()
 
         # CHECKPOINT PRESERVATION: Keep temp files for recovery
         # DO NOT delete - allows resume if export phase crashes or analysis is re-run
@@ -13978,114 +14109,27 @@ class ClimbAnalyzer:
 
         # ============================================================================
         # SQLite Export - Generate iOS-compatible database alongside Excel
-        # With geographic partitioning for large regions (>1.5GB)
         # ============================================================================
         sqlite_files = []
-        partition_info = []
         sqlite_checksums = {}
+        sqlite_gz_files = []
+        sqlite_gz_checksums = {}
+        gz_decompressed_size = 0
 
         try:
             from climb_analyzer.data.sqlite_export import SQLiteExporter
-            from climb_analyzer.data.partition_engine import (
-                needs_partitioning,
-                partition_climbs,
-                PartitionInfo,
-                _in_bounds,
-            )
-            from climb_analyzer.data.geo_definitions import get_predefined_partitions
 
             # Determine units for SQLite (ft or m)
             db_units = "ft" if units == "imperial" else "m"
 
-            # Check if partitioning is needed
-            use_partitioning = needs_partitioning(total_filtered)
-
-            if use_partitioning:
-                print(f"\nGenerating partitioned SQLite databases for iOS app...")
-                print(f"  Region '{scope_info}' has {total_filtered:,} climbs - partitioning required")
-
-                # Get partition definitions
-                region_key = scope_info.lower().replace(" ", "-").replace("_", "-") if scope_info else "region"
-                predefined = get_predefined_partitions(region_key)
-
-                if predefined:
-                    print(f"  Using predefined partitions: {', '.join(predefined.keys())}")
-                    partitions = [
-                        PartitionInfo(
-                            partition_id=pid,
-                            display_name=pdef["display_name"],
-                            bounds=pdef["bounds"],
-                            climb_count=0,  # Will be counted during export
-                        )
-                        for pid, pdef in predefined.items()
-                    ]
-                else:
-                    # For automatic partitioning, we need to scan climbs first to get bounds
-                    print(f"  No predefined partitions - using automatic Quadtree subdivision")
-                    # Scan climbs to get bounds and count for quadtree
-                    min_lat = min_lon = float('inf')
-                    max_lat = max_lon = float('-inf')
-                    with open(final_sorted_file.name, "rb") as f:
-                        try:
-                            while True:
-                                batch = safe_pickle_load(f)
-                                for climb in batch:
-                                    if climb.start_lat < min_lat:
-                                        min_lat = climb.start_lat
-                                    if climb.start_lat > max_lat:
-                                        max_lat = climb.start_lat
-                                    if climb.start_lon < min_lon:
-                                        min_lon = climb.start_lon
-                                    if climb.start_lon > max_lon:
-                                        max_lon = climb.start_lon
-                        except EOFError:
-                            pass
-
-                    overall_bounds = (min_lat, min_lon, max_lat, max_lon)
-                    # Use partition_climbs with empty list just to generate quadtree structure
-                    # We'll route climbs during the streaming pass
-                    from climb_analyzer.data.partition_engine import _quadtree_partition
-                    raw_partitions = _quadtree_partition([], overall_bounds, max_climbs=900000)
-                    # Fallback: just create quadrant partitions
-                    mid_lat = (min_lat + max_lat) / 2
-                    mid_lon = (min_lon + max_lon) / 2
-                    partitions = [
-                        PartitionInfo("northeast", "Northeast", (mid_lat, mid_lon, max_lat, max_lon), 0),
-                        PartitionInfo("northwest", "Northwest", (mid_lat, min_lon, max_lat, mid_lon), 0),
-                        PartitionInfo("southeast", "Southeast", (min_lat, mid_lon, mid_lat, max_lon), 0),
-                        PartitionInfo("southwest", "Southwest", (min_lat, min_lon, mid_lat, mid_lon), 0),
-                    ]
-
-                # Create exporters for each partition
-                exporters = {}
-                for part in partitions:
-                    part_filename = f"{base_filename}{suffix}_{part.partition_id}.sqlite"
-                    part_file = output_dir / part_filename
-                    exporters[part.partition_id] = {
-                        "exporter": SQLiteExporter(part_file, file_id=part_filename, units=db_units),
-                        "file": part_file,
-                        "partition": part,
-                        "count": 0,
-                    }
-                    exporters[part.partition_id]["exporter"].open()
-
-                # Also create an "other" exporter for boundary cases
-                other_filename = f"{base_filename}{suffix}_other.sqlite"
-                other_file = output_dir / other_filename
-                exporters["other"] = {
-                    "exporter": SQLiteExporter(other_file, file_id=other_filename, units=db_units),
-                    "file": other_file,
-                    "partition": PartitionInfo("other", "Other Regions", (0, 0, 0, 0), 0),
-                    "count": 0,
-                }
-                exporters["other"]["exporter"].open()
-
-            else:
-                print(f"\nGenerating SQLite database for iOS app...")
-                sqlite_filename = f"{base_filename}{suffix}.sqlite"
-                sqlite_file = output_dir / sqlite_filename
-                single_exporter = SQLiteExporter(sqlite_file, file_id=sqlite_filename, units=db_units)
-                single_exporter.open()
+            # Single SQLite file per region.
+            # Files >2GB are split at upload time for GitHub releases.
+            # iOS app handles spatial subsetting via R-tree index at query time.
+            print(f"\nGenerating SQLite database for iOS app...")
+            sqlite_filename = f"{base_filename}{suffix}.sqlite"
+            sqlite_file = output_dir / sqlite_filename
+            single_exporter = SQLiteExporter(sqlite_file, file_id=sqlite_filename, units=db_units)
+            single_exporter.open()
 
             # Re-read the sorted temp file and geocode data
             with open(final_sorted_file.name, "rb") as f:
@@ -14101,9 +14145,7 @@ class ClimbAnalyzer:
                 with tqdm(
                     total=total_filtered, desc="  Writing SQLite", unit="climbs", **TQDM_DEFAULTS
                 ) as pbar:
-                    batch_rows = {}  # Keyed by partition_id if partitioning, else single list
-                    if not use_partitioning:
-                        batch_rows["single"] = []
+                    batch_rows = []
 
                     try:
                         while True:
@@ -14116,7 +14158,11 @@ class ClimbAnalyzer:
 
                                 # Distance from center
                                 center_distance = 0.0
-                                if analysis_center:
+                                if (
+                                    analysis_center
+                                    and analysis_center[0] is not None
+                                    and analysis_center[1] is not None
+                                ):
                                     from math import radians, sin, cos, sqrt, atan2
                                     lat1, lon1 = radians(analysis_center[0]), radians(analysis_center[1])
                                     lat2, lon2 = radians(climb.start_lat), radians(climb.start_lon)
@@ -14179,115 +14225,86 @@ class ClimbAnalyzer:
                                     f"Elevation Profile ({elev_unit})": getattr(climb, "elevation_profile", "") or "",
                                 }
 
-                                if use_partitioning:
-                                    # Route to appropriate partition based on location
-                                    target_partition = "other"
-                                    lat, lon = climb.start_lat, climb.start_lon
-                                    for part in partitions:
-                                        if _in_bounds(lat, lon, part.bounds):
-                                            target_partition = part.partition_id
-                                            break
-
-                                    if target_partition not in batch_rows:
-                                        batch_rows[target_partition] = []
-                                    batch_rows[target_partition].append(row)
-                                    exporters[target_partition]["count"] += 1
-
-                                    # Write batch when full
-                                    if len(batch_rows[target_partition]) >= 5000:
-                                        exporters[target_partition]["exporter"].write_rows(batch_rows[target_partition])
-                                        batch_rows[target_partition] = []
-                                else:
-                                    batch_rows["single"].append(row)
-                                    # Write batch when full
-                                    if len(batch_rows["single"]) >= 5000:
-                                        single_exporter.write_rows(batch_rows["single"])
-                                        batch_rows["single"] = []
+                                batch_rows.append(row)
+                                if len(batch_rows) >= 5000:
+                                    single_exporter.write_rows(batch_rows)
+                                    batch_rows = []
 
                                 pbar.update(1)
 
                     except EOFError:
                         pass
 
-                    # Write final batches
-                    if use_partitioning:
-                        for part_id, rows in batch_rows.items():
-                            if rows and part_id in exporters:
-                                exporters[part_id]["exporter"].write_rows(rows)
-                    else:
-                        if batch_rows["single"]:
-                            single_exporter.write_rows(batch_rows["single"])
+                    # Write final batch
+                    if batch_rows:
+                        single_exporter.write_rows(batch_rows)
 
-            # Close exporters and collect files
-            if use_partitioning:
-                print(f"\n  Partition summary:")
-                for part_id, exp_info in exporters.items():
-                    exp_info["exporter"].close()
-                    if exp_info["count"] > 0:
-                        file_size_mb = exp_info["file"].stat().st_size / (1024**2)
-                        print(f"    {exp_info['partition'].display_name}: {exp_info['count']:,} climbs ({file_size_mb:.1f} MB)")
-                        sqlite_files.append(exp_info["file"])
-                        exp_info["partition"].climb_count = exp_info["count"]
-                        exp_info["partition"].file_path = exp_info["file"]
-                        exp_info["partition"].file_size = exp_info["file"].stat().st_size
-                        partition_info.append(exp_info["partition"])
-                    else:
-                        # Remove empty partition files
-                        if exp_info["file"].exists():
-                            exp_info["file"].unlink()
+            single_exporter.close()
+            sqlite_size_mb = sqlite_file.stat().st_size / (1024**2)
+            decompressed_size = sqlite_file.stat().st_size
+            print(f"✓ Saved SQLite database: {sqlite_file.name} ({single_exporter.row_count:,} rows, {sqlite_size_mb:.1f} MB)")
 
-                print(f"\n✓ Created {len(sqlite_files)} partitioned SQLite databases")
+            # SQLite distribution strategy for GitHub Releases (2GB per-asset limit):
+            #
+            # 1. Raw .sqlite path (backward compat for older iOS app versions):
+            #    - If .sqlite < 1.95 GB: upload as single file
+            #    - If .sqlite >= 1.95 GB: split into .sqlite.001/.002/...
+            #
+            # 2. Gzipped .sqlite.gz path (preferred, ~3x smaller downloads):
+            #    - If .sqlite.gz < 1.95 GB: upload as single file (typical)
+            #    - If .sqlite.gz >= 1.95 GB: split into .sqlite.gz.001/.002/...
+            #
+            # Both paths are uploaded so old and new iOS app versions both work.
+            # The gz file is produced via streaming compression, so memory stays flat.
+            from utils.file_splitter import should_split_file, split_file, gzip_file
 
-                # Generate partition metadata files and checksums
-                if partition_info:
-                    from climb_analyzer.data.sqlite_export import write_partition_metadata, compute_sha256
+            # --- Path 1: gzip the sqlite (preferred path) ---
+            gz_decompressed_size = decompressed_size
+            try:
+                gz_path = gzip_file(sqlite_file, compresslevel=6, delete_original=False)
+                gz_size = gz_path.stat().st_size
+                if should_split_file(gz_path):
+                    print(
+                        f"\n  Compressed file still exceeds 1.95GB - splitting .sqlite.gz for GitHub releases..."
+                    )
+                    chunks, sqlite_gz_checksums = split_file(gz_path, delete_original=True)
+                    sqlite_gz_files = chunks
+                    print(f"  ✓ Created {len(chunks)} gz chunks with SHA256 checksums")
+                else:
+                    sqlite_gz_files = [gz_path]
+                    # Single-file checksum for verification on-device
+                    from utils.file_splitter import calculate_sha256
+                    sqlite_gz_checksums[gz_path.name] = calculate_sha256(gz_path)
+            except Exception as e:
+                print(f"⚠️  gzip step failed, continuing with raw sqlite only: {e}")
+                import traceback
+                traceback.print_exc()
 
-                    print(f"  Generating partition metadata files...")
-                    checksums_content = []
-
-                    for partition in partition_info:
-                        # Write individual metadata file
-                        metadata_path = write_partition_metadata(partition, output_dir)
-                        print(f"    {metadata_path.name}")
-
-                        # Collect checksum for combined file
-                        sha256 = compute_sha256(partition.file_path)
-                        checksums_content.append(f"{sha256}  {partition.file_path.name}")
-
-                    # Write combined checksums file
-                    checksums_file = output_dir / f"{base_filename}{suffix}.partitions.sha256"
-                    with open(checksums_file, "w") as f:
-                        f.write("\n".join(checksums_content) + "\n")
-                    print(f"  ✓ Created partition checksums: {checksums_file.name}")
-
-            else:
-                single_exporter.close()
-                sqlite_size_mb = sqlite_file.stat().st_size / (1024**2)
-                print(f"✓ Saved SQLite database: {sqlite_file.name} ({single_exporter.row_count:,} rows, {sqlite_size_mb:.1f} MB)")
-                sqlite_files.append(sqlite_file)
-
-                # Split large SQLite files for GitHub releases (2GB limit)
-                from utils.file_splitter import should_split_file, split_file
-
-                if should_split_file(sqlite_file):
-                    print(f"\n  SQLite file exceeds 1.95GB - splitting for GitHub releases...")
-                    chunks, sqlite_checksums = split_file(sqlite_file, delete_original=True)
-                    # Replace the single file with the chunks
-                    sqlite_files = chunks
-                    print(f"  ✓ Created {len(chunks)} chunks with SHA256 checksums")
+            # --- Path 2: raw .sqlite (backward compat) ---
+            # Still performed so existing app versions keep working.
+            sqlite_files.append(sqlite_file)
+            if should_split_file(sqlite_file):
+                print(f"\n  Raw SQLite exceeds 1.95GB - also producing .sqlite.001/.002/... for backward compat...")
+                chunks, sqlite_checksums = split_file(sqlite_file, delete_original=True)
+                sqlite_files = chunks
+                print(f"  ✓ Created {len(chunks)} raw chunks with SHA256 checksums")
 
         except Exception as e:
             print(f"⚠️  SQLite export failed: {e}")
             import traceback
             traceback.print_exc()
 
-        # Return dict with both Excel and SQLite files
+        # Return dict with both Excel, raw SQLite, and gzipped SQLite paths.
+        # sqlite/sqlite_checksums: raw sqlite or its .001/.002 split chunks.
+        # sqlite_gz/sqlite_gz_checksums: single .sqlite.gz or its .gz.001/.002 split chunks.
         return {
             "xlsx": created_files,
             "sqlite": sqlite_files,
             "sqlite_checksums": sqlite_checksums,
-            "sqlite_partitions": partition_info,  # List of PartitionInfo for partitioned exports
-            "climb_count": total_filtered
+            "sqlite_gz": sqlite_gz_files,
+            "sqlite_gz_checksums": sqlite_gz_checksums,
+            "sqlite_decompressed_size": gz_decompressed_size,
+            "climb_count": total_filtered,
         }
 
     # ============================================================================
@@ -19991,6 +20008,8 @@ def main():
                 region_name = " > ".join([continent] + [p.split("/")[-1] for p in path])
                 print(f"Analyzing region: {region_name}")
                 region_display_name = path[-1].split("/")[-1] if path else continent
+                # Keep full canonical path for unambiguous lookups (e.g., "us/georgia" not "georgia")
+                region_canonical_path = path[-1] if path else region_display_name
             else:
                 # String format: "Hawaii" or "north-america/us/hawaii"
                 region_str = location[0]
@@ -19998,6 +20017,7 @@ def main():
                 print(f"Analyzing region: {region_str}")
                 # Extract region name (last part of path)
                 region_display_name = region_str.split("/")[-1]
+                region_canonical_path = region_str
                 # For lookups, we'll use geo_lookup to search osm_pbf_urls
                 continent = None
                 path = None
@@ -20011,8 +20031,9 @@ def main():
                 # Normalize region name for lookup
                 normalized_name = region_display_name.replace("-", " ").title()
 
-                # Use geo_lookup to find bounds - it searches the entire hierarchy
-                found_bounds = lookup_bounds(region_display_name)
+                # Use full canonical path for bounds lookup to avoid ambiguity
+                # (e.g., "us/georgia" resolves to US state, not "georgia" the country)
+                found_bounds = lookup_bounds(region_canonical_path)
 
                 if found_bounds:
                     # Bounds format: (lat_min, lon_min, lat_max, lon_max)
@@ -20196,6 +20217,7 @@ def main():
             for i, (continent, path) in enumerate(location, 1):
                 region_name = " > ".join([continent] + [p.split("/")[-1] for p in path])
                 region_display_name = path[-1].split("/")[-1] if path else continent
+                region_canonical_path = path[-1] if path else region_display_name
 
                 # Skip if already completed
                 if batch_tracker.is_completed(region_name):
@@ -20213,9 +20235,9 @@ def main():
                     print(f"\n=== [{i}/{len(location)}] Analyzing {region_name} ===")
                     batch_tracker.mark_started(region_name)
 
-                    # Get bounds for this region using geo_lookup
+                    # Get bounds for this region using full canonical path to avoid ambiguity
                     try:
-                        bounds = lookup_bounds(region_display_name)
+                        bounds = lookup_bounds(region_canonical_path)
                         if bounds:
                             lat_min, lon_min, lat_max, lon_max = bounds
                             center_lat = (lat_min + lat_max) / 2
@@ -20676,12 +20698,18 @@ def main():
         # New format returns dict with xlsx, sqlite, climb_count
         # Legacy format returns list of Path objects
         sqlite_files = []
+        sqlite_gz_files = []
+        sqlite_gz_checksums = {}
+        sqlite_decompressed_size = 0
         export_climb_count = 0
 
         if isinstance(df, dict) and "xlsx" in df:
-            # New return format with xlsx, sqlite, and climb_count
+            # New return format with xlsx, sqlite, sqlite_gz, and climb_count
             created_files = df["xlsx"]
             sqlite_files = df.get("sqlite", [])
+            sqlite_gz_files = df.get("sqlite_gz", []) or []
+            sqlite_gz_checksums = df.get("sqlite_gz_checksums", {}) or {}
+            sqlite_decompressed_size = df.get("sqlite_decompressed_size", 0)
             export_climb_count = df.get("climb_count", 0)
         elif isinstance(df, list) and df and all(isinstance(f, Path) for f in df):
             # Legacy format (list of files)
@@ -20845,6 +20873,9 @@ def main():
                             output_files = {
                                 "xlsx": [f for f in created_files if str(f).endswith('.xlsx')],
                                 "sqlite": sqlite_files if 'sqlite_files' in dir() and sqlite_files else [],
+                                "sqlite_gz": sqlite_gz_files if 'sqlite_gz_files' in dir() and sqlite_gz_files else [],
+                                "sqlite_gz_checksums": sqlite_gz_checksums if 'sqlite_gz_checksums' in dir() else {},
+                                "sqlite_decompressed_size": sqlite_decompressed_size if 'sqlite_decompressed_size' in dir() else 0,
                                 "csv": None,
                                 "climb_count": export_climb_count if 'export_climb_count' in dir() else 0,
                             }

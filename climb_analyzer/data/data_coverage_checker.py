@@ -481,28 +481,35 @@ def auto_download_osm_data(
         # Handle both single country and multiple countries
         locations = location if isinstance(location, list) else [location]
 
+        def _search_any_depth(data_dict, target):
+            """Recursively search for a region path/name at any depth.
+            Handles both simple names ("mexico") and full paths ("canada/british-columbia"),
+            which is needed when detect_region_type mislabels a subregion as a country."""
+            for region_path, region_info in data_dict.items():
+                region_name = region_path.split('/')[-1]
+                if region_name.lower() == target or region_path.lower() == target:
+                    pbf_url = region_info.get('pbf_url') if isinstance(region_info, dict) else None
+                    if pbf_url:
+                        return pbf_url
+                if isinstance(region_info, dict) and 'subregions' in region_info:
+                    r = _search_any_depth(region_info['subregions'], target)
+                    if r:
+                        return r
+            return None
+
         for loc in locations:
             loc_normalized = loc.lower()
-
-            # Search for country in osm_pbf_urls subregions
-            found = False
+            pbf_url = None
             for continent, continent_data in osm_pbf_urls.items():
-                # Look in the subregions (where individual countries are)
                 if 'subregions' in continent_data:
-                    for region_path, region_info in continent_data['subregions'].items():
-                        region_name = region_path.split('/')[-1]
-                        # Support both formats: "france" (simple name) or "europe/france" (full path)
-                        if region_name.lower() == loc_normalized or region_path.lower() == loc_normalized:
-                            pbf_url = region_info.get('pbf_url')
-                            if pbf_url:
-                                filename = pbf_url.split('/')[-1]
-                                regions_to_download.append((loc, pbf_url, filename))
-                                found = True
-                                break
-                if found:
-                    break
+                    pbf_url = _search_any_depth(continent_data['subregions'], loc_normalized)
+                    if pbf_url:
+                        break
 
-            if not found:
+            if pbf_url:
+                filename = pbf_url.split('/')[-1]
+                regions_to_download.append((loc, pbf_url, filename))
+            else:
                 print(f"⚠️  Could not find OSM download URL for: {loc}")
                 return False
 

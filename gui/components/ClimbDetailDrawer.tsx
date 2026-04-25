@@ -5,6 +5,7 @@ import { X, ChevronUp, ChevronDown, ExternalLink, Mountain, MapPin, TrendingUp, 
 import { Climb } from '@/types/climb';
 import { getCategoryColor } from '@/lib/csv-parser';
 import { ElevationProfile } from '@/components/ElevationProfile';
+import { useSettings, fmtDistance, fmtElevation } from '@/lib/settings';
 
 type DrawerState = 'collapsed' | 'half' | 'full';
 
@@ -16,21 +17,52 @@ interface ClimbDetailDrawerProps {
 }
 
 export function ClimbDetailDrawer({ climb, allClimbs = [], onClose, onClimbSelect }: ClimbDetailDrawerProps) {
+  const [settings] = useSettings();
   const [drawerState, setDrawerState] = useState<DrawerState>('half');
   const [isDragging, setIsDragging] = useState(false);
   const dragStartY = useRef(0);
   const dragStartHeight = useRef(0);
   const drawerRef = useRef<HTMLDivElement>(null);
 
-  // Get connected climbs
-  const connectedClimbs = climb?.connectedClimbs
-    ? climb.connectedClimbs
-        .split(',')
-        .map(name => name.trim())
-        .filter(name => name && name !== '' && name.toLowerCase() !== 'none')
-        .map(name => allClimbs.find(c => c.streetName.trim() === name))
-        .filter((c): c is Climb => c !== undefined)
-    : [];
+  // Parse connected climbs. iOS encodes them as "Name (way_id), Other (way_id2)".
+  // Older outputs may just be a comma-separated list of names with no way ids.
+  // Match by way_id when present (most reliable), then fall back to name.
+  const connectedClimbs = (() => {
+    if (!climb?.connectedClimbs) return [] as Climb[];
+    const seen = new Set<string>();
+    const out: Climb[] = [];
+    for (const raw of climb.connectedClimbs.split(',')) {
+      const entry = raw.trim();
+      if (!entry || entry.toLowerCase() === 'none') continue;
+
+      // "Some Name (123456789)" → name="Some Name", wayId="123456789"
+      const m = entry.match(/^(.*?)\s*\((\d+)\)\s*$/);
+      const wantedWayId = m?.[2];
+      const wantedName = (m ? m[1] : entry).trim();
+
+      let match: Climb | undefined;
+      if (wantedWayId) {
+        match = allClimbs.find(c => (c.wayId || '').trim() === wantedWayId);
+        if (!match) {
+          // wayId may be in allWayIds composite field
+          match = allClimbs.find(c => (c.allWayIds || '').split(',').map(s => s.trim()).includes(wantedWayId));
+        }
+      }
+      if (!match && wantedName) {
+        const lower = wantedName.toLowerCase();
+        match = allClimbs.find(c => c.streetName.trim().toLowerCase() === lower);
+      }
+
+      if (match) {
+        const key = (match.wayId || '') + '|' + match.streetName;
+        if (seen.has(key)) continue;
+        if (climb.wayId && match.wayId === climb.wayId) continue; // skip self
+        seen.add(key);
+        out.push(match);
+      }
+    }
+    return out;
+  })();
 
   // Get drawer height based on state
   const getDrawerHeight = useCallback((state: DrawerState): string => {
@@ -183,12 +215,12 @@ export function ClimbDetailDrawer({ climb, allClimbs = [], onClose, onClimbSelec
           <StatCard
             icon={<ArrowUp className="h-4 w-4" />}
             label="Elevation Gain"
-            value={`${climb.elevationGain?.toFixed(0) || '—'} ft`}
+            value={fmtElevation(climb.elevationGain, settings.units)}
           />
           <StatCard
             icon={<Ruler className="h-4 w-4" />}
             label="Length"
-            value={`${climb.length?.toFixed(2) || '—'} mi`}
+            value={fmtDistance(climb.length, settings.units)}
           />
           <StatCard
             icon={<TrendingUp className="h-4 w-4" />}
@@ -207,12 +239,12 @@ export function ClimbDetailDrawer({ climb, allClimbs = [], onClose, onClimbSelec
           <StatCard
             icon={<Mountain className="h-4 w-4" />}
             label="Height"
-            value={`${climb.height?.toFixed(0) || '—'} ft`}
+            value={fmtElevation(climb.height, settings.units)}
           />
           <StatCard
             icon={<Mountain className="h-4 w-4" />}
             label="Prominence"
-            value={`${climb.prominence?.toFixed(0) || '—'} ft`}
+            value={fmtElevation(climb.prominence, settings.units)}
           />
           <StatCard
             icon={<MapPin className="h-4 w-4" />}
@@ -307,7 +339,7 @@ export function ClimbDetailDrawer({ climb, allClimbs = [], onClose, onClimbSelec
                     <span className="font-medium text-sm">{connected.streetName}</span>
                   </div>
                   <span className="text-xs text-gray-500">
-                    {connected.elevationGain?.toFixed(0)} ft • {connected.avgGrade?.toFixed(1)}%
+                    {fmtElevation(connected.elevationGain, settings.units)} • {connected.avgGrade?.toFixed(1)}%
                   </span>
                 </button>
               ))}
@@ -315,13 +347,19 @@ export function ClimbDetailDrawer({ climb, allClimbs = [], onClose, onClimbSelec
           </div>
         )}
 
-        {/* Elevation Profile */}
+        {/* Elevation Profile — only render the section when this climb has profile data */}
         {drawerState === 'full' && (
           <div className="mb-4">
             <h3 className="font-semibold text-gray-900 mb-2">Elevation Profile</h3>
-            <div className="bg-gray-50 rounded-lg overflow-hidden">
-              <ElevationProfile climb={climb} onClose={() => {}} hideHeader />
-            </div>
+            {climb.elevationProfile ? (
+              <div className="bg-gray-50 rounded-lg overflow-hidden">
+                <ElevationProfile climb={climb} onClose={() => {}} hideHeader units={settings.units} />
+              </div>
+            ) : (
+              <div className="bg-gray-50 rounded-lg p-4 text-sm text-gray-500 text-center">
+                No elevation profile available for this climb.
+              </div>
+            )}
           </div>
         )}
 

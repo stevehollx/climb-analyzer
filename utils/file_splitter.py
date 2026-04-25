@@ -3,9 +3,15 @@ File splitter utility for large files exceeding GitHub's 2GB release asset limit
 
 Splits SQLite databases >= 1.95GB into chunks < 1.9GB each, with SHA256 checksums
 for verification.
+
+Also provides gzip_file() for streaming compression of SQLite databases, which
+typically reduces size by 2.5-4x (e.g. 2 GB SQLite -> 600 MB .sqlite.gz). The
+compressed file may or may not need splitting depending on region size.
 """
 
 import os
+import gzip
+import shutil
 import hashlib
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
@@ -103,6 +109,57 @@ def split_file(
         print(f"    Deleted original file to save disk space")
 
     return chunks, checksums
+
+
+def gzip_file(
+    file_path: Path,
+    compresslevel: int = 6,
+    delete_original: bool = False,
+) -> Path:
+    """
+    Compress a file using gzip streaming (memory-efficient).
+
+    Produces {file_path}.gz next to the original. Uses 1 MB block I/O to keep
+    memory usage low regardless of input file size.
+
+    Compression level 6 is the gzip default: good ratio (~3x for SQLite), fast.
+    Higher levels (7-9) give marginal gains at much higher CPU cost.
+
+    Args:
+        file_path: File to compress
+        compresslevel: gzip level 1-9 (default 6)
+        delete_original: Remove the uncompressed file after successful compression
+
+    Returns:
+        Path to the .gz file
+    """
+    gz_path = file_path.with_suffix(file_path.suffix + ".gz")
+    size_gb = file_path.stat().st_size / (1024**3)
+    print(f"  Compressing {file_path.name} ({size_gb:.2f} GB) with gzip...")
+    logger.info(f"Compressing {file_path} -> {gz_path}")
+
+    # Stream in 1 MB blocks: memory stays flat regardless of file size
+    with open(file_path, "rb") as src, gzip.open(
+        gz_path, "wb", compresslevel=compresslevel
+    ) as dst:
+        shutil.copyfileobj(src, dst, length=1024 * 1024)
+
+    orig_size = file_path.stat().st_size
+    gz_size = gz_path.stat().st_size
+    ratio = orig_size / gz_size if gz_size > 0 else 0
+    gz_gb = gz_size / (1024**3)
+    print(
+        f"  ✓ Compressed to {gz_path.name} ({gz_gb:.2f} GB, {ratio:.1f}x compression)"
+    )
+    logger.info(
+        f"Compressed {orig_size:,} -> {gz_size:,} bytes ({ratio:.1f}x ratio)"
+    )
+
+    if delete_original:
+        file_path.unlink()
+        logger.info(f"Deleted original: {file_path.name}")
+
+    return gz_path
 
 
 def get_checksum_file_path(sqlite_file: Path) -> Optional[Path]:

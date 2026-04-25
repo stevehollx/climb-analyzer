@@ -8,7 +8,7 @@ Checks if required OSM + DEM data exists before analysis.
 import sys
 import subprocess
 from pathlib import Path
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 from difflib import SequenceMatcher
 
 from utils.dataset_selector import get_required_datasets
@@ -19,16 +19,18 @@ def _validate_region_match(region_name: str, filename: str, min_similarity: floa
     """
     Validate that a filename actually matches the region being searched.
 
-    Prevents completely wrong matches like 'france' -> 'hawaii-latest.osm.pbf'.
-    Allows reasonable variations like 'New York' -> 'newyork-latest.osm.pbf'.
+    Only exact normalized matches are accepted. Substring containment ("kansas"
+    inside "arkansas") is EXPLICITLY rejected — it caused wrong-region selection
+    that wasted hours of analysis time on the wrong data.
 
     Args:
         region_name: Region being searched (e.g., "France", "New York")
         filename: OSM filename (e.g., "france-latest.osm.pbf", "hawaii-latest.osm.pbf")
-        min_similarity: Minimum similarity ratio (0.0-1.0) required for a match
+        min_similarity: Retained for signature compatibility; no longer used.
 
     Returns:
-        True if filename reasonably matches region_name, False otherwise
+        True if filename exactly matches region_name (after whitespace/delim
+        normalization), False otherwise.
     """
     # Normalize both strings for comparison
     region_normalized = region_name.lower().replace(" ", "").replace("-", "").replace("_", "")
@@ -37,27 +39,25 @@ def _validate_region_match(region_name: str, filename: str, min_similarity: floa
     filename_base = filename.lower().replace(".osm.pbf", "").replace("-latest", "")
     filename_normalized = filename_base.replace(" ", "").replace("-", "").replace("_", "")
 
-    # Special case: if normalized strings match exactly, it's valid
-    if region_normalized == filename_normalized:
-        return True
+    # Strip known disambiguation prefixes (e.g., "us_georgia" -> "georgia",
+    # "europe_georgia" -> "georgia") so both forms exact-match correctly.
+    for prefix in ("us", "europe", "asia", "africa", "oceania", "southamerica", "northamerica"):
+        if filename_normalized.startswith(prefix) and len(filename_normalized) > len(prefix):
+            candidate = filename_normalized[len(prefix):]
+            if candidate == region_normalized:
+                return True
 
-    # Special case: if region is contained in filename or vice versa, it's valid
-    # But both must be at least 3 chars to avoid spurious matches
-    if len(region_normalized) >= 3 and len(filename_normalized) >= 3:
-        if region_normalized in filename_normalized or filename_normalized in region_normalized:
-            return True
-
-    # Use fuzzy matching for similarity check
-    similarity = SequenceMatcher(None, region_normalized, filename_normalized).ratio()
-
-    return similarity >= min_similarity
+    return region_normalized == filename_normalized
 
 
-def find_osm_file_for_region(region_name: str) -> Path:
+def find_osm_file_for_region(region_name: str, canonical_path: Optional[str] = None) -> Path:
     """
     Find OSM .pbf file for a region.
 
     Prioritizes merged files (created for cross-border searches) over individual region files.
+
+    For ambiguous regions (e.g., Georgia the US state vs Georgia the country),
+    pass canonical_path to disambiguate (e.g., "us/georgia" vs "europe/georgia").
 
     Args:
         region_name: Name of region/country (or US state name)
@@ -65,6 +65,7 @@ def find_osm_file_for_region(region_name: str) -> Path:
                     - Simple name: "liechtenstein"
                     - Hierarchical path: "europe/liechtenstein"
                     - Nested path: "north-america/us/california"
+        canonical_path: Optional full canonical path for disambiguation
 
     Returns:
         Path to OSM file, or None if not found
@@ -73,6 +74,22 @@ def find_osm_file_for_region(region_name: str) -> Path:
     if not planet_dir.exists():
         return None
 
+    # If a canonical_path is provided separately, use it for disambiguation first
+    if canonical_path and '/' in canonical_path:
+        try:
+            from climb_analyzer.data.osm_downloader import AMBIGUOUS_STEMS
+            path_parts = canonical_path.split('/')
+            stem_name = path_parts[-1].lower().replace(" ", "-").replace("_", "-")
+            if stem_name in AMBIGUOUS_STEMS and len(path_parts) >= 2:
+                parent = path_parts[-2]
+                disambiguated = planet_dir / f"{parent}_{stem_name}-latest.osm.pbf"
+                if disambiguated.exists():
+                    return disambiguated
+                # Specific file missing - don't fall through to ambiguous match
+                return None
+        except ImportError:
+            pass
+
     # Extract the actual region name from hierarchical path FIRST
     # e.g., "europe/liechtenstein" -> "liechtenstein"
     # e.g., "north-america/us/california" -> "california"
@@ -80,6 +97,21 @@ def find_osm_file_for_region(region_name: str) -> Path:
         region_parts = region_name.split('/')
         # Use the last part as the actual region name
         actual_region_name = region_parts[-1]
+        # For ambiguous regions (e.g., "us/georgia" vs "europe/georgia"),
+        # check for the disambiguated filename first
+        try:
+            from climb_analyzer.data.osm_downloader import AMBIGUOUS_STEMS
+            normalized = actual_region_name.lower().replace(" ", "-").replace("_", "-")
+            if normalized in AMBIGUOUS_STEMS and len(region_parts) >= 2:
+                parent = region_parts[-2]
+                disambiguated = planet_dir / f"{parent}_{normalized}-latest.osm.pbf"
+                if disambiguated.exists():
+                    return disambiguated
+                # Don't fall through to ambiguous lookup if the specific file
+                # isn't present - we'd risk returning the wrong one
+                return None
+        except ImportError:
+            pass
     else:
         actual_region_name = region_name
 
@@ -135,17 +167,22 @@ def find_osm_file_for_region(region_name: str) -> Path:
 
     # PRIORITY 2: Check if this is a US state
     if is_us_state(actual_region_name):
-        # Look for state-specific file first (e.g., hawaii-latest.osm.pbf)
+        # Look for state-specific file first (e.g., hawaii-latest.osm.pbf).
+        # Require exact stem match: "kansas-latest" or "us_kansas-latest".
+        # Substring matching caused "kansas" to pick up "arkansas-latest.osm.pbf".
+        # NOTE: Path.stem only strips one extension; for "kansas-latest.osm.pbf"
+        # it returns "kansas-latest.osm", so we strip ".osm.pbf" from the name.
         state_normalized = actual_region_name.lower().replace(" ", "-").replace("_", "-")
+        expected_stems = {
+            f"{state_normalized}-latest",
+            f"us_{state_normalized}-latest",
+        }
         for pbf_file in planet_dir.glob("*.osm.pbf"):
-            stem_lower = pbf_file.stem.lower()
-            # Skip merged files (already checked)
+            stem_lower = pbf_file.name.lower().replace(".osm.pbf", "")
             if stem_lower.startswith("merged-"):
                 continue
-            if state_normalized in stem_lower:
-                # Validate the match before returning
-                if _validate_region_match(actual_region_name, pbf_file.name):
-                    return pbf_file
+            if stem_lower in expected_stems:
+                return pbf_file
 
         # If no state file, look for whole United States OSM file
         us_patterns = ["united-states", "us-latest", "usa"]
@@ -159,18 +196,24 @@ def find_osm_file_for_region(region_name: str) -> Path:
         # No US or state file found
         return None
 
-    # PRIORITY 3: Try exact match for country/region name
+    # PRIORITY 3: Exact match for country/region name
+    # Stem must exactly equal "<region>-latest" (with optional parent prefix
+    # like "canada_british-columbia-latest"). Substring match is forbidden —
+    # e.g., "mexico" must not match "new-mexico-latest.osm.pbf".
     normalized_name = actual_region_name.lower().replace(" ", "-").replace("_", "-")
+    exact_stems = {f"{normalized_name}-latest"}
     for pbf_file in planet_dir.glob("*.osm.pbf"):
-        stem_lower = pbf_file.stem.lower()
+        stem_lower = pbf_file.name.lower().replace(".osm.pbf", "")
         if stem_lower.startswith("merged-"):
             continue
-        if normalized_name in stem_lower:
-            # Validate the match before returning
-            if _validate_region_match(actual_region_name, pbf_file.name):
-                return pbf_file
+        if stem_lower in exact_stems:
+            return pbf_file
+        # Allow parent-prefixed form like "canada_yukon-latest" or
+        # "europe_switzerland-latest" when validation confirms exact region match.
+        if "_" in stem_lower and stem_lower.endswith(f"_{normalized_name}-latest"):
+            return pbf_file
 
-    # No match found with sufficient similarity
+    # No match found
     return None
 
 

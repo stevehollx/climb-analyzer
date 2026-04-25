@@ -351,35 +351,69 @@ class ChunkPersistenceManager:
         elevation_complete_file = self.analysis_dir / "elevation_complete.pkl"
         return elevation_complete_file.exists()
 
-    def save_datasets_used(self, datasets: List[str]) -> None:
+    def save_datasets_used(self, datasets, priority: Optional[List[str]] = None) -> None:
         """
-        Save list of elevation datasets that were actually used during analysis.
+        Save elevation dataset info to checkpoint.
+
+        New format (dict): {"priority": [...], "actually_used": [...]}
+        Old format (list): [actually_used] — still read for backwards compat.
 
         Args:
-            datasets: List of dataset names (e.g., ['ned10m', 'srtm30m'])
+            datasets: List of datasets that actually returned data, OR a dict
+                      with keys "priority" and "actually_used".
+            priority: Configured priority order for this region (optional). When
+                      provided, a dict is written so downstream consumers can
+                      report the intended cascade even if only one dataset
+                      supplied data.
         """
         datasets_file = self.analysis_dir / "datasets_used.json"
         try:
+            if isinstance(datasets, dict):
+                payload = datasets
+            elif priority is not None:
+                payload = {"priority": list(priority), "actually_used": list(datasets)}
+            else:
+                # Legacy call site with no priority info — write list format
+                payload = list(datasets)
             with open(datasets_file, 'w') as f:
-                json.dump(datasets, f)
+                json.dump(payload, f)
         except Exception as e:
             print(f"Warning: Could not save datasets_used: {e}")
 
     def load_datasets_used(self) -> List[str]:
         """
-        Load list of elevation datasets that were used during analysis.
+        Load datasets that were used during analysis.
+
+        Returns the actually-used list, whether the checkpoint is in old
+        (list) or new (dict) format. For priority, use load_datasets_info().
+        """
+        info = self.load_datasets_info()
+        return info.get("actually_used", [])
+
+    def load_datasets_info(self) -> dict:
+        """
+        Load full dataset info dict.
 
         Returns:
-            List of dataset names, or empty list if not found
+            Dict with keys "priority" and "actually_used" (lists). Either
+            may be empty. Handles both the new dict format and the legacy
+            list-only format on disk.
         """
         datasets_file = self.analysis_dir / "datasets_used.json"
-        if datasets_file.exists():
-            try:
-                with open(datasets_file) as f:
-                    return json.load(f)
-            except Exception as e:
-                print(f"Warning: Could not load datasets_used: {e}")
-        return []
+        if not datasets_file.exists():
+            return {"priority": [], "actually_used": []}
+        try:
+            with open(datasets_file) as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return {"priority": [], "actually_used": list(data)}
+            return {
+                "priority": list(data.get("priority", [])),
+                "actually_used": list(data.get("actually_used", [])),
+            }
+        except Exception as e:
+            print(f"Warning: Could not load datasets_used: {e}")
+            return {"priority": [], "actually_used": []}
 
     def load_progress(self) -> Tuple[List[int], int, Dict]:
         """

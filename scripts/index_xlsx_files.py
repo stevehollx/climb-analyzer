@@ -178,6 +178,33 @@ def get_region_path(tag_region: str) -> str:
     if tag_lower in OTHER_REGIONS_TO_PATH:
         return OTHER_REGIONS_TO_PATH[tag_lower]
 
+    # Continent-prefix fallback: e.g. "canada-alberta" -> "north-america/canada/alberta",
+    # "north-america-mexico" -> "north-america/mexico", "europe-france" -> "europe/france".
+    # This catches tags that follow the "<continent-or-country>-<rest>" convention without
+    # requiring every permutation to be hardcoded above.
+    continent_prefixes = {
+        "north-america": "north-america",
+        "south-america": "south-america",
+        "europe": "europe",
+        "asia": "asia",
+        "africa": "africa",
+        "oceania": "oceania",
+        "antarctica": "antarctica",
+        # Country-level prefixes that nest under a continent
+        "canada": "north-america/canada",
+        "usa": "north-america/united-states-of-america",
+        "us": "north-america/united-states-of-america",
+        "france": "europe/france",
+        "germany": "europe/germany",
+        "italy": "europe/italy",
+        "spain": "europe/spain",
+    }
+    for prefix, path_root in continent_prefixes.items():
+        if tag_lower.startswith(prefix + "-"):
+            remainder = tag_lower[len(prefix) + 1:]
+            if remainder:
+                return f"{path_root}/{remainder}"
+
     # Default: return as-is if not found (for custom/unknown regions)
     return tag_lower
 
@@ -456,6 +483,15 @@ def scan_releases(owner: str, repo: str, token: Optional[str] = None) -> Dict[st
         sqlite_split_urls = []
         sha256_url = None
 
+        # Gzipped SQLite detection (.sqlite.gz single-file or .sqlite.gz.001/.002 split)
+        sqlite_gz_file = None
+        sqlite_gz_size = 0
+        sqlite_gz_url = None
+        sqlite_gz_split_files = []
+        sqlite_gz_split_sizes = []
+        sqlite_gz_split_urls = []
+        sqlite_gz_sha256_url = None
+
         # Partitioned SQLite detection (geographic partitions: _norcal, _socal, _northeast, etc.)
         sqlite_partition_files = []
         sqlite_partition_sizes = []
@@ -495,6 +531,29 @@ def scan_releases(owner: str, repo: str, token: Optional[str] = None) -> Dict[st
                 # Extract region name from xlsx filename
                 if not region_name:
                     region_name = extract_region_from_filename(name)
+
+            elif re.match(r'.*\.sqlite\.gz\.\d{3}$', name):
+                # Split gzipped SQLite chunk (.sqlite.gz.001, .sqlite.gz.002, ...)
+                sqlite_gz_split_files.append(name)
+                sqlite_gz_split_sizes.append(size)
+                sqlite_gz_split_urls.append(download_url)
+                if not region_name:
+                    # Remove ".001" to get ".sqlite.gz", then back to base name
+                    base_name = name.rsplit('.', 1)[0].replace('.gz', '')
+                    region_name = extract_region_from_filename(base_name)
+
+            elif name.endswith(".sqlite.gz"):
+                # Single-file gzipped SQLite (not split)
+                sqlite_gz_file = name
+                sqlite_gz_size = size
+                sqlite_gz_url = download_url
+                if not region_name:
+                    base_name = name[:-len('.gz')]  # strip ".gz" -> ".sqlite"
+                    region_name = extract_region_from_filename(base_name)
+
+            elif name.endswith(".sqlite.gz.sha256"):
+                # Checksum file for split gzipped SQLite
+                sqlite_gz_sha256_url = download_url
 
             elif re.match(r'.*\.sqlite\.\d{3}$', name):
                 # Split SQLite chunk (.sqlite.001, .sqlite.002, etc.)
@@ -580,6 +639,19 @@ def scan_releases(owner: str, repo: str, token: Optional[str] = None) -> Dict[st
             sqlite_split_files = [sqlite_split_files[i] for i in sorted_indices]
             sqlite_split_sizes = [sqlite_split_sizes[i] for i in sorted_indices]
             sqlite_split_urls = [sqlite_split_urls[i] for i in sorted_indices]
+
+        # Sort split gzipped SQLite chunks (.gz.001, .gz.002, ...)
+        if sqlite_gz_split_files:
+            sorted_indices = sorted(
+                range(len(sqlite_gz_split_files)),
+                key=lambda i: sqlite_gz_split_files[i]
+            )
+            sqlite_gz_split_files = [sqlite_gz_split_files[i] for i in sorted_indices]
+            sqlite_gz_split_sizes = [sqlite_gz_split_sizes[i] for i in sorted_indices]
+            sqlite_gz_split_urls = [sqlite_gz_split_urls[i] for i in sorted_indices]
+
+        is_split_gz = len(sqlite_gz_split_files) > 0
+        has_gz = sqlite_gz_file is not None or is_split_gz
 
         # Sort partitioned SQLite files for consistent ordering (alphabetically by partition_id)
         partitions_data = []
@@ -671,10 +743,23 @@ def scan_releases(owner: str, repo: str, token: Optional[str] = None) -> Dict[st
             "total_size": sum(xlsx_sizes),
             "file_count": len(xlsx_files),
             "has_split_files": has_split_files,
-            # Database fields (for non-partitioned, non-split databases)
-            "database_file": sqlite_file if not is_split_db and not is_partitioned_db else None,
-            "database_size": sqlite_size if not is_split_db and not is_partitioned_db else None,
-            "database_url": sqlite_url if not is_split_db and not is_partitioned_db else None,
+            # Database fields - always populated when SQLite exists
+            # For split databases: logical name/total size, download via split_urls
+            "database_file": (
+                sqlite_file if sqlite_file
+                else sqlite_split_files[0].rsplit('.', 1)[0] if sqlite_split_files  # e.g., .sqlite.001 -> .sqlite
+                else None
+            ),
+            "database_size": (
+                sqlite_size if sqlite_size
+                else sum(sqlite_split_sizes) if sqlite_split_sizes
+                else None
+            ),
+            "database_url": (
+                sqlite_url if sqlite_url
+                else sqlite_split_urls[0] if sqlite_split_urls  # First chunk URL as reference
+                else None
+            ),
             # Split database fields (binary chunks - iOS-expected schema)
             "is_split": is_split_db,
             "split_files": sqlite_split_files if is_split_db else None,
@@ -685,7 +770,38 @@ def scan_releases(owner: str, repo: str, token: Optional[str] = None) -> Dict[st
             "is_partitioned": is_partitioned_db,
             "partition_type": partition_type,
             "partitions": partitions_data if is_partitioned_db else None,
-            "total_database_size": sum(sqlite_partition_sizes) if is_partitioned_db else None,
+            "total_database_size": (
+                sum(sqlite_partition_sizes) if is_partitioned_db
+                else sum(sqlite_split_sizes) if is_split_db
+                else sqlite_size if sqlite_size
+                else None
+            ),
+            # Gzipped database fields (preferred format - ~3x smaller downloads).
+            # When present, the iOS app should prefer these over the raw sqlite path.
+            # - database_format: "gzip" if a .sqlite.gz is available, else "sqlite"
+            # - database_gz_url: single-file download URL (null if split across chunks)
+            # - database_gz_size: total compressed size on disk
+            # - database_decompressed_size: size after decompression (matches raw sqlite size)
+            # - is_gz_split: true when .sqlite.gz exceeds 2 GB and is split into .gz.00N
+            # - gz_split_files/gz_split_urls/gz_split_sizes: chunks to download+concat
+            "database_format": "gzip" if has_gz else ("sqlite" if (sqlite_file or is_split_db) else None),
+            "database_gz_file": (
+                sqlite_gz_file if sqlite_gz_file
+                else (sqlite_gz_split_files[0].rsplit('.', 1)[0] if sqlite_gz_split_files else None)
+            ),
+            "database_gz_size": (
+                sqlite_gz_size if sqlite_gz_size
+                else (sum(sqlite_gz_split_sizes) if sqlite_gz_split_sizes else None)
+            ),
+            "database_gz_url": sqlite_gz_url if sqlite_gz_file else None,
+            "database_decompressed_size": (
+                sqlite_size if sqlite_size
+                else (sum(sqlite_split_sizes) if sqlite_split_sizes else None)
+            ),
+            "is_gz_split": is_split_gz,
+            "gz_split_files": sqlite_gz_split_files if is_split_gz else None,
+            "gz_split_urls": sqlite_gz_split_urls if is_split_gz else None,
+            "gz_split_sizes": sqlite_gz_split_sizes if is_split_gz else None,
             # Dates
             "published_at": published_at,
             "last_updated": last_updated,

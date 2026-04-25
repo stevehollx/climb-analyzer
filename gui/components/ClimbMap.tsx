@@ -6,6 +6,36 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { Trophy } from 'lucide-react';
 import { Climb } from '@/types/climb';
 import { getCategoryColor } from '@/lib/csv-parser';
+import { useSettings, fmtDistance, fmtElevation } from '@/lib/settings';
+
+// Parse "Name (way_id), Name2 (way_id2)" — same logic as ClimbDetailDrawer.
+// Returns array of { name, wayId? }. Older outputs may have just names.
+function parseConnectedClimbsField(value: string | undefined): Array<{ name: string; wayId?: string }> {
+  if (!value) return [];
+  const out: Array<{ name: string; wayId?: string }> = [];
+  for (const raw of value.split(',')) {
+    const entry = raw.trim();
+    if (!entry || entry.toLowerCase() === 'none') continue;
+    const m = entry.match(/^(.*?)\s*\((\d+)\)\s*$/);
+    if (m) out.push({ name: m[1].trim(), wayId: m[2] });
+    else out.push({ name: entry });
+  }
+  return out;
+}
+
+function findClimbByConnectedRef(
+  climbs: Climb[],
+  ref: { name: string; wayId?: string }
+): Climb | undefined {
+  if (ref.wayId) {
+    const byWay = climbs.find(c => (c.wayId || '').trim() === ref.wayId);
+    if (byWay) return byWay;
+    const byAll = climbs.find(c => (c.allWayIds || '').split(',').map(s => s.trim()).includes(ref.wayId!));
+    if (byAll) return byAll;
+  }
+  const lower = ref.name.toLowerCase();
+  return climbs.find(c => c.streetName.trim().toLowerCase() === lower);
+}
 
 // Category priority for sorting overlapping pins (HC first)
 const CATEGORY_ORDER: Record<string, number> = {
@@ -203,6 +233,7 @@ interface ClimbMapProps {
 }
 
 export function ClimbMap({ climbs, allClimbs, bounds, showAllRoutes = false, scoreType = 'basic', onClimbClick }: ClimbMapProps) {
+  const [settings] = useSettings();
   // Use allClimbs for lookups if provided, otherwise fall back to climbs
   const climbsForLookup = allClimbs || climbs;
   const mapContainer = useRef<HTMLDivElement>(null);
@@ -510,12 +541,13 @@ export function ClimbMap({ climbs, allClimbs, bounds, showAllRoutes = false, sco
         el.style.boxShadow = '0 3px 6px rgba(0,0,0,0.4)';
       });
 
-      // Parse connected climbs (filter out empty strings and "None")
-      const connectedClimbs = climb.connectedClimbs
-        ? climb.connectedClimbs.split(',').map(w => w.trim()).filter(w => w && w !== '' && w.toLowerCase() !== 'none')
-        : [];
-
-      console.log(`Climb "${climb.streetName}" has ${connectedClimbs.length} connected climbs:`, connectedClimbs);
+      // Parse connected climbs. iOS encodes them as "Name (way_id), Other (way_id2)";
+      // older data is just comma-separated names.
+      const connectedRefs = parseConnectedClimbsField(climb.connectedClimbs);
+      // Resolve to actual climb objects so the popup only lists ones we can navigate to
+      const connectedClimbsResolved = connectedRefs
+        .map(ref => findClimbByConnectedRef(climbsForLookup, ref))
+        .filter((c): c is Climb => !!c && c.wayId !== climb.wayId);
 
       // Create popup content with prominent category display
       let popupContent = `
@@ -531,10 +563,10 @@ export function ClimbMap({ climbs, allClimbs, bounds, showAllRoutes = false, sco
           </p>
           <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #eee; font-size: 12px;">
             <div style="margin-bottom: 4px;">
-              <strong>Elevation Gain:</strong> ${climb.elevationGain.toFixed(0)} ft
+              <strong>Elevation Gain:</strong> ${fmtElevation(climb.elevationGain, settings.units)}
             </div>
             <div style="margin-bottom: 4px;">
-              <strong>Length:</strong> ${climb.length.toFixed(2)} mi
+              <strong>Length:</strong> ${fmtDistance(climb.length, settings.units)}
             </div>
             <div style="margin-bottom: 4px;">
               <strong>Avg Grade:</strong> ${climb.avgGrade.toFixed(1)}%
@@ -549,14 +581,14 @@ export function ClimbMap({ climbs, allClimbs, bounds, showAllRoutes = false, sco
       `;
 
       // Add connected climbs section if there are any
-      if (connectedClimbs.length > 0) {
+      if (connectedClimbsResolved.length > 0) {
         popupContent += `
           <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #eee; font-size: 12px;">
             <div style="margin-bottom: 4px;"><strong>Connected Climbs:</strong></div>
             <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-              ${connectedClimbs.map((connectedName, idx) => {
-                // Connected climbs are stored as street names in the data
-                return `<a href="#" class="connected-climb-link-${index}-${idx}" data-name="${connectedName}" style="color: #2563eb; text-decoration: underline; cursor: pointer; font-size: 11px;">${connectedName}</a>`;
+              ${connectedClimbsResolved.map((cc, idx) => {
+                const safeName = (cc.streetName || 'Unnamed').replace(/"/g, '&quot;');
+                return `<a href="#" class="connected-climb-link-${index}-${idx}" data-way-id="${cc.wayId || ''}" style="color: #2563eb; text-decoration: underline; cursor: pointer; font-size: 11px;">${safeName}</a>`;
               }).join(', ')}
             </div>
           </div>
@@ -571,39 +603,20 @@ export function ClimbMap({ climbs, allClimbs, bounds, showAllRoutes = false, sco
         closeOnClick: true
       }).setHTML(popupContent);
 
-      // Add event listeners for connected climb links after popup opens
+      // Wire up the connected-climb links to actually select that climb
       popup.on('open', () => {
-        console.log(`Popup opened for "${climb.streetName}", setting up ${connectedClimbs.length} connected climb link(s)`);
-        connectedClimbs.forEach((connectedName, idx) => {
+        connectedClimbsResolved.forEach((targetClimb, idx) => {
           const link = document.querySelector(`.connected-climb-link-${index}-${idx}`);
-          console.log(`Looking for link .connected-climb-link-${index}-${idx} for climb "${connectedName}":`, link ? 'FOUND' : 'NOT FOUND');
-          if (link) {
-            link.addEventListener('click', (e) => {
-              e.preventDefault();
-              console.log('=== CONNECTED CLIMB LINK CLICKED ===');
-              console.log('Clicked climb name:', connectedName);
-              console.log('Current highlighted wayIds before click:', Array.from(highlightedWayIds));
-              // Find the climb with this street name in all climbs (not just filtered)
-              // Note: Connected climbs are stored as street names, not wayIds
-              const targetClimb = climbsForLookup.find(c => c.streetName.trim() === connectedName.trim());
-              console.log('Target climb found:', targetClimb ? `"${targetClimb.streetName}" (wayId: ${targetClimb.wayId}, category: ${targetClimb.category})` : 'NOT FOUND');
-              if (targetClimb) {
-                // Find the index in the full array for consistency
-                const targetClimbIndex = climbsForLookup.findIndex(c => c.streetName.trim() === connectedName.trim());
-                console.log('Target climb index:', targetClimbIndex);
-                console.log('Target climb wayId:', targetClimb.wayId);
-                // Highlight this route
-                setHighlightedClimbIndex(targetClimbIndex);
-                console.log('Calling showRouteForClimb with wayId:', targetClimb.wayId);
-                showRouteForClimb(targetClimb.wayId, targetClimb.category, targetClimbIndex, true);
-              } else {
-                console.warn('Connected climb not found in dataset:', connectedName);
-                console.log('Available climbs:', climbsForLookup.map(c => c.streetName));
-              }
-            });
-          } else {
-            console.warn(`Link element not found in DOM: .connected-climb-link-${index}-${idx}`);
-          }
+          if (!link) return;
+          link.addEventListener('click', (e) => {
+            e.preventDefault();
+            const targetIdx = climbsForLookup.findIndex(c => c.wayId === targetClimb.wayId && c.lat === targetClimb.lat);
+            setHighlightedClimbIndex(targetIdx);
+            if (targetClimb.wayId) {
+              showRouteForClimb(targetClimb.wayId, targetClimb.category, targetIdx, true);
+            }
+            if (onClimbClick) onClimbClick(targetClimb);
+          });
         });
       });
 

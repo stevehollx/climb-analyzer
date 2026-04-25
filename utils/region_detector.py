@@ -226,32 +226,39 @@ def detect_region_type(region_name: str) -> Tuple[str, str]:
     # Check if input is a US state abbreviation
     if region_lower in US_STATE_ABBREVS:
         full_name = US_STATE_ABBREVS[region_lower]
-        # Look up the full state name to get canonical path
-        region_info = find_region(full_name)
+        # Use explicit us/ prefix to avoid ambiguity (e.g., GA -> georgia -> europe/georgia)
+        region_info = find_region(f"us/{full_name.replace(' ', '-')}")
         if region_info:
             return ("state", region_info.get("path", f"us/{full_name.replace(' ', '-')}"))
         return ("state", f"us/{full_name.replace(' ', '-')}")
 
-    # Handle ambiguous region names - Georgia is both a US state and a country
-    if region_lower == "georgia":
-        print("\n⚠️  Ambiguous region detected: 'Georgia'")
-        print("   1. Georgia (US State)")
-        print("   2. Georgia (Country in Europe/Asia)")
-        print()
+    # Handle ambiguous region names that match both a US state and a country.
+    # Default to US state unless user explicitly chooses otherwise.
+    AMBIGUOUS_REGIONS = {
+        "georgia": ("us/georgia", "europe/georgia", "Georgia (US State)", "Georgia (Country in Europe/Asia)"),
+        "washington": ("us/washington", "us/washington", None, None),  # Not ambiguous but could be DC
+    }
 
-        while True:
+    if region_lower in AMBIGUOUS_REGIONS:
+        us_path, other_path, us_label, other_label = AMBIGUOUS_REGIONS[region_lower]
+        if us_label and other_label:
+            # Truly ambiguous - prompt if interactive
             try:
-                choice = input("Please select (1 or 2): ").strip()
-                if choice == "1":
-                    return ("state", "us/georgia")
-                elif choice == "2":
-                    return ("country", "europe/georgia")
-                else:
-                    print("Invalid choice. Please enter 1 or 2.")
+                import sys
+                if sys.stdin.isatty():
+                    print(f"\n⚠️  Ambiguous region detected: '{region_name}'")
+                    print(f"   1. {us_label} (default)")
+                    print(f"   2. {other_label}")
+                    print()
+                    choice = input("Please select [1]: ").strip()
+                    if choice == "2":
+                        return ("country", other_path)
+                    # Any other input (including empty) = US state
+                    return ("state", us_path)
             except (KeyboardInterrupt, EOFError):
-                # Default to US state if user cancels
-                print("\nDefaulting to Georgia (US State)")
-                return ("state", "us/georgia")
+                pass
+            # Non-interactive or error: default to US state
+            return ("state", us_path)
 
     # Check if it's a US state first
     if is_us_state(region_name):

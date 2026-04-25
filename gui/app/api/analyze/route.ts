@@ -4,6 +4,7 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { promises as fs } from 'fs';
 import yaml from 'yaml';
+import { buildAnalyzeArgs } from '@/lib/cli-command';
 
 // Progress tracking interface
 interface Progress {
@@ -230,75 +231,38 @@ export async function POST(request: Request): Promise<Response> {
     const config = await request.json();
     const jobId = uuidv4();
 
-    // Build command line arguments based on config
-    const args: string[] = [];
-
-    // Analysis mode
-    if (config.mode === 'address') {
-      if (!config.address || !config.radius) {
-        return NextResponse.json(
-          { error: 'Address and radius are required for address mode' },
-          { status: 400 }
-        );
-      }
-      args.push('--address', config.address);
-      args.push('--distance', config.radius.toString());
-    } else if (config.mode === 'region') {
-      if (!config.region) {
-        return NextResponse.json(
-          { error: 'Region is required for region mode' },
-          { status: 400 }
-        );
-      }
-      args.push('--run-region', config.region);
-    } else if (config.mode === 'batch') {
-      if (!config.regions || config.regions.length === 0) {
-        return NextResponse.json(
-          { error: 'Regions are required for batch mode' },
-          { status: 400 }
-        );
-      }
-      args.push('--run-region', config.regions.join(','));
+    // Validate required fields up front (the shared builder is permissive)
+    if (config.mode === 'address' && (!config.address || !config.radius)) {
+      return NextResponse.json(
+        { error: 'Address and radius are required for address mode' },
+        { status: 400 }
+      );
+    }
+    if (config.mode === 'region' && !config.region && (!config.regions || config.regions.length === 0)) {
+      return NextResponse.json(
+        { error: 'Region is required for region mode' },
+        { status: 400 }
+      );
+    }
+    if (config.mode === 'batch' && (!config.regions || config.regions.length === 0)) {
+      return NextResponse.json(
+        { error: 'Regions are required for batch mode' },
+        { status: 400 }
+      );
     }
 
-    // Surface filter
-    if (config.surfaceFilter && config.surfaceFilter !== 'all') {
-      args.push('--surface-filter', config.surfaceFilter);
-    }
-
-    // Cycling filter is always disabled - filtering happens in visualization
-    // This ensures all climbs are included in the analysis
-
-    // Units
-    if (config.units) {
-      args.push('--units', config.units);
-    }
-
-    // Min score (uses basic scoring for filtering - all 3 scores are always calculated)
-    if (config.minScore !== undefined && config.minScore !== null) {
-      args.push('--score-type', 'basic');  // Default to basic score for filtering
-      args.push('--min-score', config.minScore.toString());
-    }
-
-    // Delete data on complete (cleanup all data for this region after analysis)
-    if (config.deleteDataOnComplete) {
-      args.push('--cleanup-all-data');
-    }
-
-    // Cloud cache upload - read from global config
+    // Read cloud cache flag from global config (shared builder will append --no-cloud-upload if disabled)
+    let cloudUploadEnabled = true;
     try {
       const configPath = path.join(process.cwd(), '..', 'config.yaml');
       const configContent = await fs.readFile(configPath, 'utf-8');
       const globalConfig = yaml.parse(configContent);
-      const cloudCacheEnabled = globalConfig.CLOUD_CACHE_ENABLED ?? true;
-
-      if (!cloudCacheEnabled) {
-        args.push('--no-cloud-upload');
-      }
-    } catch (error) {
-      // If config can't be read, default to enabled (no --no-cloud-upload flag)
+      cloudUploadEnabled = globalConfig.CLOUD_CACHE_ENABLED ?? true;
+    } catch {
       console.log('Could not read cloud cache config, defaulting to enabled');
     }
+
+    const args = buildAnalyzeArgs(config, { cloudUploadEnabled });
 
     // Get the path to the CLI script (1 level up from gui/)
     const cliPath = path.join(process.cwd(), '..', 'climb_analyzer.py');

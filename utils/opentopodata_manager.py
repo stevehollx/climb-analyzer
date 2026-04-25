@@ -208,9 +208,11 @@ def scan_elevation_datasets(elevation_data_dir: Path, skip_empty: bool = True) -
     arctic_dir = elevation_data_dir / "arctic32m"
     if arctic_vrt.exists():
         print("  ✓ Found ArcticDEM VRT file")
+        # OpenTopoData requires a DIRECTORY path (os.path.isdir check); passing
+        # the .vrt file directly yields "No dataset folder found" → 500 error.
         datasets.append({
             "name": "arctic32m",
-            "path": "data/arctic32m-vrt/arctic32m.vrt",
+            "path": "data/arctic32m-vrt/",
         })
     elif arctic_dir.exists():
         arctic_files = list(arctic_dir.glob("**/*.tif"))
@@ -231,7 +233,7 @@ def scan_elevation_datasets(elevation_data_dir: Path, skip_empty: bool = True) -
         print("  ✓ Found REMA VRT file")
         datasets.append({
             "name": "rema32m",
-            "path": "data/rema32m-vrt/rema32m.vrt",
+            "path": "data/rema32m-vrt/",
         })
     elif rema_dir.exists():
         rema_files = list(rema_dir.glob("**/*.tif"))

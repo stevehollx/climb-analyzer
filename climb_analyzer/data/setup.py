@@ -281,14 +281,17 @@ def download_dem_for_region(
             dir_path.mkdir(parents=True, exist_ok=True)
 
         # Initialize downloaders with their specific subdirectories
-        # Note: All datasets use public sources - no credentials needed
+        # Aliases must match ALL keys used in DATASET_PRIORITY_BY_REGION
+        # (engine.py) — a missing alias silently drops that dataset here too.
         downloaders = {
             "aw3d30": AW3D30Downloader(aw3d30_dir),
             "rema": REMADownloader(rema_dir),
+            "rema32m": REMADownloader(rema_dir),
             "arcticdem": ArcticDEMDownloader(arcticdem_dir),
+            "arctic32m": ArcticDEMDownloader(arcticdem_dir),
             "srtm": SRTMDownloader(srtm_dir),
             "srtm30m": SRTMDownloader(srtm_dir),
-            "ned10m": NEDDownloader(ned10m_dir)
+            "ned10m": NEDDownloader(ned10m_dir),
         }
 
         # Sort datasets by download priority (primary/high-quality first)

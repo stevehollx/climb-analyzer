@@ -5,6 +5,8 @@
 
 # Credentials and secrets
 .credentials/
+.env
+.env.*
 
 # Claude config (local)
 .claude/
@@ -34,6 +36,17 @@ build/
 # Temporary files
 tmp/
 *.tmp.*
+
+# Next.js build output
+.next
+.next/
+gui/.next/
+
+# SMB filesystem deletion artifacts
+.smbdelete*
+
+# Test caches
+tests/.pjamm_cache.json
 
 # This file
 .gitignore

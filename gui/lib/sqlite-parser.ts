@@ -18,8 +18,9 @@ let sqlJsPromise: Promise<any> | null = null;
 async function initSqlJsOnce(): Promise<any> {
   if (!sqlJsPromise) {
     sqlJsPromise = initSqlJs({
-      // Use CDN for the WASM binary - more reliable than bundling
-      locateFile: (file: string) => `https://sql.js.org/dist/${file}`,
+      // Serve from /public so it works offline and isn't blocked by CDN issues.
+      // We copy node_modules/sql.js/dist/sql-wasm.wasm → public/sql-wasm.wasm at build time.
+      locateFile: (file: string) => `/${file}`,
     });
   }
   return sqlJsPromise;

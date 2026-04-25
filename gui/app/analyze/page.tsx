@@ -16,6 +16,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Play, Loader2, FolderOpen, ChevronDown, ChevronRight, CheckCircle2, XCircle } from 'lucide-react';
 import { AnalysisConfig } from '@/types/climb';
 import CloudCacheWarningDialog from '../components/CloudCacheWarningDialog';
+import { CommandPreview } from '@/components/CommandPreview';
 
 interface Region {
   name: string;
@@ -837,6 +838,9 @@ export default function AnalyzePage() {
                   </div>
                 </div>
 
+                {/* CLI command preview - copy and paste to run in your own terminal */}
+                <CommandPreview config={config} />
+
                 {/* Submit/Stop Button */}
                 {!isRunning ? (
                   <Button
@@ -845,7 +849,7 @@ export default function AnalyzePage() {
                     disabled={isRunning}
                   >
                     <Play className="mr-2 h-4 w-4" />
-                    Start Analysis
+                    Or Run in Background (Server)
                   </Button>
                 ) : (
                   <Button

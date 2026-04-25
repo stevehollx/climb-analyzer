@@ -229,14 +229,19 @@ class DataManager:
         earthdata_creds = creds.get("earthdata")
 
         # Initialize downloaders
+        # Aliases must match ALL keys used in DATASET_PRIORITY_BY_REGION dicts —
+        # a missing alias silently drops that dataset from the download phase.
         downloaders = {
             "ned10m": NEDDownloader(self.elevation_dir / "ned10m"),
             "srtm": SRTMDownloader(self.elevation_dir / "srtm30m", credentials=earthdata_creds),
-            "srtm30m": SRTMDownloader(self.elevation_dir / "srtm30m", credentials=earthdata_creds),  # Alias
+            "srtm30m": SRTMDownloader(self.elevation_dir / "srtm30m", credentials=earthdata_creds),
             "aster": ASTERDownloader(self.elevation_dir / "aster30m", credentials=earthdata_creds),
-            "aw3d30": AW3D30Downloader(self.elevation_dir / "aw3d30"),  # Uses public FTP
+            "aster30m": ASTERDownloader(self.elevation_dir / "aster30m", credentials=earthdata_creds),
+            "aw3d30": AW3D30Downloader(self.elevation_dir / "aw3d30"),
             "arcticdem": ArcticDEMDownloader(self.elevation_dir / "arctic32m"),
+            "arctic32m": ArcticDEMDownloader(self.elevation_dir / "arctic32m"),
             "rema": REMADownloader(self.elevation_dir / "rema32m"),
+            "rema32m": REMADownloader(self.elevation_dir / "rema32m"),
         }
 
         bbox = (lat_min, lon_min, lat_max, lon_max)
@@ -356,22 +361,28 @@ class DataManager:
 
         Args:
             region_name: Country, state name, or hierarchical region path
-                        Examples: "france", "bristol", "california", "europe > isle-of-man"
+                        Examples: "france", "bristol", "california", "europe > isle-of-man",
+                        "us/georgia" (canonical path, preferred for ambiguous names)
             is_state: Deprecated - no longer used (kept for backward compatibility)
 
         Returns:
             Tuple of (lat_min, lon_min, lat_max, lon_max) or None
         """
-        # Handle hierarchical paths like "europe > isle-of-man" or "england > bristol"
+        # Preserve full canonical path for unambiguous lookup.
+        # "us > georgia" -> "us/georgia", "europe > andorra" -> "europe/andorra"
         if " > " in region_name:
-            # Extract the last part (actual region name)
-            parts = [p.strip() for p in region_name.split(" > ")]
+            parts = [p.strip().lower().replace(" ", "-") for p in region_name.split(" > ")]
+            search_name = "/".join(parts)
+            # Try full path first (handles "us/georgia" vs "europe/georgia")
+            result = lookup_bounds(search_name)
+            if result:
+                return result
+            # Fall back to last segment only
             search_name = parts[-1]
         else:
             search_name = region_name
 
         # Use the new geo_lookup module which searches osm_pbf_urls recursively
-        # This handles all regions: countries, states, subregions (like Bristol)
         return lookup_bounds(search_name)
 
     def ensure_data_ready(

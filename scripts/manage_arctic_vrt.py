@@ -309,14 +309,25 @@ class ArcticVRTManager:
             vrt_content = self.vrt_path.read_text()
             vrt_content = vrt_content.replace('relativeToVRT="0"', 'relativeToVRT="1"')
 
-            # Convert absolute paths to relative paths
-            # VRT is in elevation_data/arctic32m-vrt/arctic32m.vrt
-            # Tiles are in elevation_data/arctic32m/*.tif
-            # So relative path should be: ../arctic32m/filename.tif
+            # Convert absolute paths to relative paths.
+            # NOTE: The opentopodata container mounts `data/elevation_data`
+            # at `/app/data` (not `/app`), so inside that container the tiles
+            # live at `/app/data/arctic32m/` — not `/app/elevation_data/...`.
+            # We strip whatever absolute prefix gdalbuildvrt produced and
+            # leave `../<dataset>/<file>.tif` (relative to VRT dir).
+            import re as _re
             if self.dataset == 'arctic32m':
-                vrt_content = vrt_content.replace('/app/elevation_data/arctic32m/', '../arctic32m/')
+                vrt_content = _re.sub(
+                    r'<SourceFilename relativeToVRT="1">[^<]*?/arctic32m/([^<]+)</SourceFilename>',
+                    r'<SourceFilename relativeToVRT="1">../arctic32m/\1</SourceFilename>',
+                    vrt_content,
+                )
             elif self.dataset == 'rema32m':
-                vrt_content = vrt_content.replace('/app/elevation_data/rema32m/', '../rema32m/')
+                vrt_content = _re.sub(
+                    r'<SourceFilename relativeToVRT="1">[^<]*?/rema32m/([^<]+)</SourceFilename>',
+                    r'<SourceFilename relativeToVRT="1">../rema32m/\1</SourceFilename>',
+                    vrt_content,
+                )
 
             self.vrt_path.write_text(vrt_content)
 

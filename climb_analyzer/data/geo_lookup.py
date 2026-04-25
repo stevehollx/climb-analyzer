@@ -339,16 +339,29 @@ def is_us_state(region_name: str) -> bool:
     """
     Check if a region name is a US state.
 
+    Uses explicit US path lookup to avoid ambiguity with countries
+    that share state names (e.g., Georgia the country vs US state).
+
     Args:
         region_name: Region name to check
 
     Returns:
         True if the region is found under north-america/us
     """
+    if region_name is None:
+        return False
+
+    # Look up with explicit US path first to avoid ambiguity
+    us_region = find_region(f"us/{region_name}")
+    if us_region and "path" in us_region:
+        path = us_region["path"]
+        pbf_url = us_region.get("pbf_url", "")
+        if path.startswith("us/") or "north-america/us" in pbf_url:
+            return True
+
+    # Fallback: check generic lookup but verify it's under us/
     region = find_region(region_name)
     if region and "path" in region:
-        # Path format is "us/california" - check if it starts with "us/"
-        # or if the pbf_url contains "north-america/us"
         path = region["path"]
         pbf_url = region.get("pbf_url", "")
         return path.startswith("us/") or "north-america/us" in pbf_url

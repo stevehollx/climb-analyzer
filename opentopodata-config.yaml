@@ -1,4 +1,8 @@
 datasets:
+- name: arctic32m
+  path: data/arctic32m-vrt/
+  filename_epsg: 4326
+  filename_tile_size: 1
 - name: ned10m
   path: data/ned10m/
   filename_epsg: 4326

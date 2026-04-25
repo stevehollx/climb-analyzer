@@ -120,6 +120,67 @@ GEOFABRIK_URLS = {
 }
 
 
+# Region name stems that exist in multiple Geofabrik paths and collide when
+# using just the URL's last segment (e.g., "georgia-latest.osm.pbf" exists in
+# both europe/ and north-america/us/). These require a path prefix in the
+# local filename to prevent one being overwritten by the other.
+AMBIGUOUS_STEMS = {"georgia"}
+
+
+def get_local_pbf_filename(url: str) -> str:
+    """
+    Generate the local filename for a Geofabrik PBF URL.
+
+    For unambiguous regions, returns the URL's last segment unchanged
+    (e.g., "california-latest.osm.pbf") to preserve backward compatibility.
+
+    For ambiguous regions (e.g., Georgia the US state vs Georgia the country),
+    prefixes the filename with the immediate parent folder from the URL path
+    (e.g., "us_georgia-latest.osm.pbf" vs "europe_georgia-latest.osm.pbf").
+
+    Args:
+        url: Full Geofabrik download URL
+
+    Returns:
+        Disambiguated local filename
+
+    Examples:
+        >>> get_local_pbf_filename("https://download.geofabrik.de/europe/france-latest.osm.pbf")
+        'france-latest.osm.pbf'
+        >>> get_local_pbf_filename("https://download.geofabrik.de/north-america/us/georgia-latest.osm.pbf")
+        'us_georgia-latest.osm.pbf'
+        >>> get_local_pbf_filename("https://download.geofabrik.de/europe/georgia-latest.osm.pbf")
+        'europe_georgia-latest.osm.pbf'
+    """
+    # Parse out the parts after the geofabrik domain
+    # e.g., "north-america/us/georgia-latest.osm.pbf" or "europe/france-latest.osm.pbf"
+    base = "https://download.geofabrik.de/"
+    if url.startswith(base):
+        path = url[len(base):]
+    else:
+        # Fallback: use everything after the last scheme separator
+        path = url.split("://", 1)[-1].split("/", 1)[-1]
+
+    parts = path.split("/")
+    filename = parts[-1]  # e.g., "georgia-latest.osm.pbf"
+
+    # Extract stem (name before "-latest.osm.pbf")
+    if not filename.endswith("-latest.osm.pbf"):
+        return filename
+    stem = filename[: -len("-latest.osm.pbf")]
+
+    # If stem is not known to be ambiguous, use the simple filename
+    if stem not in AMBIGUOUS_STEMS:
+        return filename
+
+    # Prefix with the immediate parent folder for disambiguation.
+    # For us/georgia -> "us", for europe/georgia -> "europe"
+    if len(parts) >= 2:
+        parent = parts[-2]
+        return f"{parent}_{filename}"
+    return filename
+
+
 def download_osm_data(
     country_name: str,
     output_dir: Optional[str] = None,
@@ -152,8 +213,8 @@ def download_osm_data(
     output_path = Path(output_dir) if output_dir else PLANET_OSM_DIR
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # Determine output filename
-    filename = url.split('/')[-1]
+    # Determine output filename (with disambiguation for ambiguous regions)
+    filename = get_local_pbf_filename(url)
     output_file = output_path / filename
 
     # Check if already exists
@@ -334,8 +395,8 @@ def download_osm_for_location(
     output_path = Path(output_dir) if output_dir else PLANET_OSM_DIR
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # Determine output filename
-    filename = url.split('/')[-1]
+    # Determine output filename (with disambiguation for ambiguous regions)
+    filename = get_local_pbf_filename(url)
     output_file = output_path / filename
 
     # Check if already exists
